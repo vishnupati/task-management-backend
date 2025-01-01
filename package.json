@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "echo \"Preparing production build\" && npm install --only=production",
+    "dev": "nodemon index.js",
     "start": "node index.js"
   },
   "author": "",
@@ -18,6 +18,7 @@
     "mongoose": "^8.9.3"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "nodemon": "^3.1.9",
+    "typescript": "^5.7.2"
   }
 }
