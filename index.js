@@ -2,13 +2,20 @@ require('dotenv').config();
 const express = require('express');
 const app = express();
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const port = process.env.PORT || 3000;
 const taskRoutes = require('./routes/task');
-const connectDB = require('./config/db'); 
+const authRoutes = require('./routes/auth');
+const connectDB = require('./config/db');
 connectDB();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
+app.use(cookieParser());
+app.use(cors({
+    origin: true,
+    credentials: true,
+}));
+app.use('/api/auth', authRoutes);
 app.use('/api/tasks', taskRoutes);
 app.get('/', (req, res) => {
     res.send('Hello World');
