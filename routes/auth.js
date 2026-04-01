@@ -24,6 +24,7 @@ router.post('/callback', validateSso, validateRequest, sso);
 router.post('/sso/callback', validateSso, validateRequest, sso);
 router.post('/token/refresh', validateRefreshToken, validateRequest, refreshToken);
 router.post('/token/revoke', validateRevokeToken, validateRequest, revokeToken);
+router.post('/logout', validateRevokeToken, validateRequest, revokeToken);
 router.get('/me', authenticate, me);
 
 router.get('/github/callback', async (req, res) => {
