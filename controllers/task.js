@@ -1,4 +1,5 @@
 const Task = require('../models/task/task');
+const { publish } = require('../config/kafka');
 
 const getTasks = async (req, res) => {
     try {
@@ -25,30 +26,34 @@ const getTaskById = async (req, res) => {
 
 const createTask = async (req, res) => {
     try {
-        const task = new Task({
-            ...req.body,
-            userId: req.user.id,
+        // Publish event to Kafka first (buffer before DB)
+        const timestamp = new Date();
+        await publish({
+            topic: 'task-events',
+            event: 'task_create_request',
+            message: { userId: req.user.id, taskData: req.body, timestamp },
         });
-        await task.save();
-        res.status(201).json(task);
+
+        // Respond immediately (DB write is async)
+        res.status(202).json({ message: 'Task creation request queued', eventId: timestamp });
     } catch (error) {
+        console.log('Error publishing task creation event:', error);
         res.status(500).json({ message: error.message });
     }
 };
 
 const updateTask = async (req, res) => {
     try {
-        const task = await Task.findOneAndUpdate(
-            { _id: req.params.id, userId: req.user.id },
-            req.body,
-            { new: true }
-        );
+        // Publish event to Kafka first (buffer before DB)
+        const timestamp = new Date();
+        await publish({
+            topic: 'task-events',
+            event: 'task_update_request',
+            message: { taskId: req.params.id, userId: req.user.id, updateData: req.body, timestamp },
+        });
 
-        if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
-        }
-
-        res.status(200).json(task);
+        // Respond immediately (DB write is async)
+        res.status(202).json({ message: 'Task update request queued', eventId: timestamp });
     } catch (error) {
         res.status(500).json({ message: error.message });
     };
@@ -56,13 +61,16 @@ const updateTask = async (req, res) => {
 
 const deleteTask = async (req, res) => {
     try {
-        const task = await Task.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
+        // Publish event to Kafka first (buffer before DB)
+        const timestamp = new Date();
+        await publish({
+            topic: 'task-events',
+            event: 'task_delete_request',
+            message: { taskId: req.params.id, userId: req.user.id, timestamp },
+        });
 
-        if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
-        }
-
-        res.status(200).json({ message: 'Task deleted' });
+        // Respond immediately (DB write is async)
+        res.status(202).json({ message: 'Task delete request queued', eventId: timestamp });
     } catch (error) {
         res.status(500).json({ message: error.message });
     };

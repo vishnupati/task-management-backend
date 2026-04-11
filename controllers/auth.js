@@ -4,6 +4,7 @@ const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/user/user');
 const RefreshToken = require('../models/auth/refresh-token');
+const { publish } = require('../config/kafka');
 
 const maxDeviceLogins = Number(process.env.MAX_DEVICE_LOGINS || 3);
 const sessionTtlSeconds = Number(process.env.SESSION_TTL_SECONDS || 60 * 30);
@@ -69,18 +70,18 @@ const getRefreshTokenFromRequest = (req) => {
     return null;
 };
 
-const toAuthResponse = (user, tokens) => ({
+const toAuthResponse = ( tokens) => ({
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken,
     token_type: 'Bearer',
     expires_in: accessTokenTtlSeconds,
     token: tokens.accessToken,
-    user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        authProvider: user.authProvider,
-    },
+    // user: {
+    //     id: user._id,
+    //     name: user.name,
+    //     email: user.email,
+    //     authProvider: user.authProvider,
+    // },
 });
 
 const issueTokenPair = async (user) => {
@@ -282,7 +283,19 @@ const signup = async (req, res) => {
 
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
-        return res.status(201).json(toAuthResponse(user, tokens));
+
+        // Publish event to Kafka
+        try {
+            await publish({
+                topic: 'auth-events',
+                event: 'user_signed_up',
+                message: { userId: user._id, email: user.email, timestamp: new Date() },
+            });
+        } catch (kafkaError) {
+            console.error('Kafka publish error:', kafkaError);
+        }
+
+        return res.status(201).json(toAuthResponse(tokens));
     } catch (error) {
         return res.status(500).json({ message: error.message });
     }
@@ -294,7 +307,6 @@ const login = async (req, res) => {
         const normalizedEmail = email.toLowerCase();
 
         const user = await User.findOne({ email: normalizedEmail }).select('+password');
-
         if (!user || !user.password) {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
@@ -311,7 +323,19 @@ const login = async (req, res) => {
 
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
-        return res.status(200).json(toAuthResponse(user, tokens));
+
+        // Publish event to Kafka
+        try {
+            await publish({
+                topic: 'auth-events',
+                event: 'user_logged_in',
+                message: { userId: user._id, email: user.email, timestamp: new Date() },
+            });
+        } catch (kafkaError) {
+            console.error('Kafka publish error:', kafkaError);
+        }
+
+        return res.status(200).json(toAuthResponse(tokens));
     } catch (error) {
         return res.status(500).json({ message: error.message });
     }
@@ -337,7 +361,19 @@ const forceLogin = async (req, res) => {
 
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
-        return res.status(200).json(toAuthResponse(user, tokens));
+
+        // Publish event to Kafka
+        try {
+            await publish({
+                topic: 'auth-events',
+                event: 'user_force_logged_in',
+                message: { userId: user._id, email: user.email, timestamp: new Date() },
+            });
+        } catch (kafkaError) {
+            console.error('Kafka publish error:', kafkaError);
+        }
+
+        return res.status(200).json(toAuthResponse(tokens));
     } catch (error) {
         return res.status(500).json({ message: error.message });
     }
@@ -378,7 +414,19 @@ const sso = async (req, res) => {
 
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
-        return res.status(200).json(toAuthResponse(user, tokens));
+
+        // Publish event to Kafka
+        try {
+            await publish({
+                topic: 'auth-events',
+                event: 'user_sso_login',
+                message: { userId: user._id, email: user.email, provider: provider, timestamp: new Date() },
+            });
+        } catch (kafkaError) {
+            console.error('Kafka publish error:', kafkaError);
+        }
+
+        return res.status(200).json(toAuthResponse(tokens));
     } catch (error) {
         return res.status(401).json({ message: error.message || 'OAuth authentication failed' });
     }
@@ -426,7 +474,19 @@ const refreshToken = async (req, res) => {
 
         const tokens = await rotateRefreshTokenPair(user, tokenDoc);
         setAuthCookies(res, tokens);
-        return res.status(200).json(toAuthResponse(user, tokens));
+
+        // Publish event to Kafka
+        try {
+            await publish({
+                topic: 'auth-events',
+                event: 'token_refreshed',
+                message: { userId: user._id, email: user.email, timestamp: new Date() },
+            });
+        } catch (kafkaError) {
+            console.error('Kafka publish error:', kafkaError);
+        }
+
+        return res.status(200).json(toAuthResponse(tokens));
     } catch (error) {
         return res.status(401).json({ message: 'Invalid refresh token' });
     }
@@ -441,10 +501,14 @@ const revokeToken = async (req, res) => {
             return res.status(200).json({ revoked: false });
         }
 
+        console.log('Revoking token:', refreshTokenValue);
+
         const decoded = jwt.verify(
             refreshTokenValue,
             process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'change-me-in-env'
         );
+
+        console.log('Decoded token for revocation:', decoded);
 
         if (!decoded || decoded.type !== 'refresh') {
             clearAuthCookies(res);
@@ -461,6 +525,17 @@ const revokeToken = async (req, res) => {
         if (!tokenDoc.revokedAt) {
             tokenDoc.revokedAt = new Date();
             await tokenDoc.save();
+
+            // Publish event to Kafka
+            try {
+                await publish({
+                    topic: 'auth-events',
+                    event: 'token_revoked',
+                    message: { userId: decoded.sub, jti: decoded.jti, timestamp: new Date() },
+                });
+            } catch (kafkaError) {
+                console.error('Kafka publish error:', kafkaError);
+            }
         }
 
         clearAuthCookies(res);
