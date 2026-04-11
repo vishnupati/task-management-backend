@@ -4,10 +4,21 @@ const CLIENT_ID = process.env.KAFKA_CLIENT_ID || 'task-management-backend';
 const GROUP_ID = process.env.KAFKA_CONSUMER_GROUP_ID || 'task-management-group';
 const BROKERS = [process.env.KAFKA_BROKERS || 'localhost:9092'];
 
+// const kafka = new Kafka({
+//     clientId: CLIENT_ID,
+//     brokers: BROKERS,
+//     logLevel: logLevel.INFO,
+// });
+
 const kafka = new Kafka({
-    clientId: CLIENT_ID,
-    brokers: BROKERS,
-    logLevel: logLevel.INFO,
+  clientId: CLIENT_ID,
+  brokers: BROKERS,
+  ssl: true,
+  sasl: {
+    mechanism: "plain",
+    username: process.env.KAFKA_USERNAME,
+    password: process.env.KAFKA_PASSWORD,
+  },
 });
 
 let producer;
