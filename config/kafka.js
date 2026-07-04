@@ -13,10 +13,17 @@ const BROKERS = [process.env.KAFKA_BROKERS || 'localhost:9092'];
 // });
 
 // kafka configuration for Aiven Kafka with SASL authentication
-const ca = fs.readFileSync(
+let  ca = fs.readFileSync(
     path.join(__dirname, "../ca.pem"),
     "utf8"
 );
+
+if (!ca) {
+    ca = fs.readFileSync(
+        path.join(__dirname, "/etc/secrets/ca.pem"),
+        "utf8"
+    ); 
+}
 
 // const kafka = new Kafka({
 //   clientId: CLIENT_ID,
