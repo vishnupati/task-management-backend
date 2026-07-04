@@ -9,6 +9,8 @@ const runConsumer = async () => {
     await consumer.subscribe({ topic: 'task-events', fromBeginning: true });
 
     await consumer.run({
+        sessionTimeout: 30000,
+        heartbeatInterval: 3000, 
         eachMessage: async ({ topic, partition, message }) => {
             if (!message.key || !message.value) {
                 console.error('Invalid message: key or value is null', { key: message.key, value: message.value });

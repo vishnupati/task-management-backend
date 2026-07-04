@@ -1,4 +1,6 @@
 const { Kafka, Partitioners, logLevel } = require('kafkajs');
+const fs = require('fs');
+const path = require('path');
 
 const CLIENT_ID = process.env.KAFKA_CLIENT_ID || 'task-management-backend';
 const GROUP_ID = process.env.KAFKA_CONSUMER_GROUP_ID || 'task-management-group';
@@ -10,12 +12,34 @@ const BROKERS = [process.env.KAFKA_BROKERS || 'localhost:9092'];
 //     logLevel: logLevel.INFO,
 // });
 
+// kafka configuration for Aiven Kafka with SASL authentication
+const ca = fs.readFileSync(
+    path.join(__dirname, "../ca.pem"),
+    "utf8"
+);
+
+// const kafka = new Kafka({
+//   clientId: CLIENT_ID,
+//   brokers: [process.env.KAFKA_BROKERS],
+//   ssl: true,
+//   logLevel: logLevel.INFO,
+//   sasl: {
+//     mechanism: "plain",
+//     username: process.env.KAFKA_USERNAME,
+//     password: process.env.KAFKA_PASSWORD,
+//     // port: process.env.KAFKA_PORT || 9093
+//   },
+// });
+
 const kafka = new Kafka({
   clientId: CLIENT_ID,
   brokers: BROKERS,
-  ssl: true,
+  ssl: {
+    rejectUnauthorized: true,
+    ca: [ca],
+  },
   sasl: {
-    mechanism: "plain",
+    mechanism: 'scram-sha-256',
     username: process.env.KAFKA_USERNAME,
     password: process.env.KAFKA_PASSWORD,
   },
