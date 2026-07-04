@@ -11,9 +11,10 @@ const BROKERS = [process.env.KAFKA_BROKERS || 'localhost:9092'];
 //     brokers: BROKERS,
 //     logLevel: logLevel.INFO,
 // });
+let ca;
 
 // kafka configuration for Aiven Kafka with SASL authentication for local development
-// let  ca = fs.readFileSync(
+//   ca = fs.readFileSync(
 //     path.join(__dirname, "../ca.pem"),
 //     "utf8"
 // );
@@ -21,7 +22,7 @@ const BROKERS = [process.env.KAFKA_BROKERS || 'localhost:9092'];
 // // kafka configuration for Aiven Kafka with SASL authentication for production
 if (!ca) {
     ca = fs.readFileSync(
-        path.join(__dirname, "/etc/secrets/ca.pem"),
+        path.join(__dirname, "../etc/secrets/ca.pem"),
         "utf8"
     ); 
 }
