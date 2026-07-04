@@ -132,13 +132,9 @@ const hasReachedDeviceQuota = async (userId) => {
 };
 
 const verifyGoogleIdentity = async (idToken) => {
-
-    console.log('Google client initialized:', !!googleClient);
     if (!googleClient) {
         throw new Error('GOOGLE_CLIENT_ID is not configured');
     }
-
-    console.log('Verifying Google ID token:', idToken);
 
     const ticket = await googleClient.verifyIdToken({
         idToken,
@@ -146,8 +142,6 @@ const verifyGoogleIdentity = async (idToken) => {
     });
 
     const payload = ticket.getPayload();
-
-    console.log('Google token payload:', payload);
 
     if (!payload || !payload.email || !payload.email_verified) {
         throw new Error('Invalid Google token');

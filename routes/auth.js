@@ -66,7 +66,7 @@ router.get('/github/callback', async (req, res) => {
 
         // 4. Redirect to frontend with tokens in query params
         // ⚠️ Do NOT send accessToken in URL in production (optional: use HttpOnly cookies)
-        const redirectUrl = `http://localhost:3000/auth/callback?access_token=${access_token}&refresh_token=${refresh_token}&user=${encodeURIComponent(
+        const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:4200'}/auth/callback?access_token=${access_token}&refresh_token=${refresh_token}&user=${encodeURIComponent(
             JSON.stringify(user)
         )}`;
 
@@ -74,7 +74,7 @@ router.get('/github/callback', async (req, res) => {
     } catch (err) {
         console.error(err);
         return res.redirect(
-            `http://localhost:3000/oauth-error?message=${encodeURIComponent(err.message)}`
+            `${process.env.FRONTEND_URL || 'http://localhost:4200'}/oauth-error?message=${encodeURIComponent(err.message)}`
         );
     }
 });
