@@ -22,7 +22,7 @@ let ca;
 // // kafka configuration for Aiven Kafka with SASL authentication for production
 if (!ca) {
     ca = fs.readFileSync(
-        path.join(__dirname, "../etc/secrets/ca.pem"),
+        path.join(__dirname, process.env.AIVEN_KAFKA_CA_PATH || '../ca.pem'),
         "utf8"
     ); 
 }

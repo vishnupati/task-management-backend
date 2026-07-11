@@ -8,6 +8,8 @@ const taskRoutes = require('./routes/task');
 const authRoutes = require('./routes/auth');
 const connectDB = require('./config/db');
 const runConsumer = require('./workers/event-consumer').runConsumer; // Import consumer
+require("./jobs/kafkaKeepAlive");
+
 connectDB();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
