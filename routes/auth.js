@@ -60,7 +60,6 @@ router.get('/github/callback', async (req, res) => {
             }),
             cookie: res.cookie.bind(res),
         });
-        console.log('SSO response:', jsonResponse);
 
         const { access_token, refresh_token, user } = jsonResponse;
 
