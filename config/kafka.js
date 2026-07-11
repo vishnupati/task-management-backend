@@ -11,7 +11,7 @@ const BROKERS = [process.env.KAFKA_BROKERS || 'localhost:9092'];
 //     brokers: BROKERS,
 //     logLevel: logLevel.INFO,
 // });
-let ca;
+// let ca;
 
 // kafka configuration for Aiven Kafka with SASL authentication for local development
 //   ca = fs.readFileSync(
@@ -20,12 +20,24 @@ let ca;
 // );
 
 // // kafka configuration for Aiven Kafka with SASL authentication for production
-if (!ca) {
-    ca = fs.readFileSync(
-        path.join(__dirname, process.env.AIVEN_KAFKA_CA_PATH || '../ca.pem'),
-        "utf8"
-    ); 
-}
+// if (!ca) {
+//     ca = fs.readFileSync(
+//         path.join(__dirname, process.env.AIVEN_KAFKA_CA_PATH || '../ca.pem'),
+//         "utf8"
+//     ); 
+// }
+
+let ca;
+
+const configuredPath = process.env.AIVEN_KAFKA_CA_PATH || "../ca.pem";
+
+const caPath = path.isAbsolute(configuredPath)
+    ? configuredPath
+    : path.resolve(__dirname, configuredPath);
+
+console.log("Kafka CA path:", caPath);
+
+ca = fs.readFileSync(caPath, "utf8");
 
 // const kafka = new Kafka({
 //   clientId: CLIENT_ID,
