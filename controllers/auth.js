@@ -17,7 +17,7 @@ const maxDeviceMessage = 'reached maxiamum login quata , if you want to login th
 const authCookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: 'none',
     path: '/',
 };
 
