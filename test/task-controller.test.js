@@ -61,13 +61,13 @@ test('update and create share the userId key so they are applied in order', asyn
     assert.equal(createCall.key, updateCall.key);
 });
 
-test('publish failure returns a generic 500 without leaking the error', async () => {
+test('publish failure returns a retryable 503 without leaking the error', async () => {
     publish.mock.mockImplementationOnce(async () => { throw new Error('broker sasl handshake failed: secret details'); });
     mock.method(console, 'error', () => {});
     const res = createRes();
 
     await createTask({ user: { id: userId }, body: { title: 'T', description: 'D' } }, res);
 
-    assert.equal(res.statusCode, 500);
+    assert.equal(res.statusCode, 503);
     assert.doesNotMatch(JSON.stringify(res.body), /sasl|secret/);
 });

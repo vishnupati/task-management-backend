@@ -8,7 +8,7 @@ const port = process.env.PORT || 3000;
 const taskRoutes = require('./routes/task');
 const authRoutes = require('./routes/auth');
 const connectDB = require('./config/db');
-const { getProducer, disconnectProducer } = require('./config/kafka');
+const { ensureTopics, getProducer, disconnectProducer } = require('./config/kafka');
 const { runConsumer, stopConsumer } = require('./workers/event-consumer');
 require("./jobs/kafkaKeepAlive");
 
@@ -45,7 +45,9 @@ const start = async () => {
 
     // Warm up Kafka in the background so the first write doesn't pay for the TLS/SASL handshake.
     // Reads keep working if Kafka is down; writes fail fast and the producer reconnects on the next request.
-    getProducer().catch((error) => console.error('Kafka producer warm-up failed:', error.message));
+    ensureTopics()
+        .then(() => getProducer())
+        .catch((error) => console.error('Kafka producer warm-up failed:', error.message));
     runConsumer();
 
     const shutdown = async (signal) => {

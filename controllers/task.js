@@ -6,6 +6,13 @@ const { publish, TOPICS } = require('../config/kafka');
 
 // Writes are applied asynchronously by workers/event-consumer.js. Every event is keyed by userId so a
 // user's create/update/delete land on the same partition and are applied in the order they were accepted.
+// Publish failures mean the write queue is unreachable, not a bad request: 503 tells clients to retry
+// (safe for creates that carry a clientTaskId, and for updates/deletes).
+const queueUnavailable = (res, action, error) => {
+    console.error(`Failed to queue task ${action}:`, error.message);
+    return res.status(503).json({ message: 'Task service is temporarily unavailable, please retry' });
+};
+
 const publishTaskEvent = async (event, userId, message) => {
     const eventId = crypto.randomUUID();
 
@@ -75,8 +82,7 @@ const createTask = async (req, res) => {
             eventId,
         });
     } catch (error) {
-        console.error('Failed to queue task creation:', error);
-        res.status(500).json({ message: 'Failed to queue task creation' });
+        queueUnavailable(res, 'creation', error);
     }
 };
 
@@ -89,8 +95,7 @@ const updateTask = async (req, res) => {
 
         res.status(202).json({ message: 'Task update request queued', eventId });
     } catch (error) {
-        console.error('Failed to queue task update:', error);
-        res.status(500).json({ message: 'Failed to queue task update' });
+        queueUnavailable(res, 'update', error);
     }
 };
 
@@ -102,8 +107,7 @@ const deleteTask = async (req, res) => {
 
         res.status(202).json({ message: 'Task delete request queued', eventId });
     } catch (error) {
-        console.error('Failed to queue task deletion:', error);
-        res.status(500).json({ message: 'Failed to queue task deletion' });
+        queueUnavailable(res, 'deletion', error);
     }
 };
 
