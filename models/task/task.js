@@ -5,9 +5,16 @@ const taskSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true,
-        index: true,
     },
-    title: String,
+    // Idempotency key for creates. The task _id is derived from it (see controllers/task.js), so a
+    // client retry or a Kafka redelivery of the same create collides on _id instead of duplicating.
+    clientTaskId: {
+        type: String,
+    },
+    title: {
+        type: String,
+        required: true,
+    },
     description: String,
     status: {
         type: String,
@@ -15,5 +22,7 @@ const taskSchema = new mongoose.Schema({
     },
 }, { timestamps: true });
 
-module.exports = mongoose.model('Task', taskSchema);
+// Backs the per-user list sorted newest first, and any userId-only lookup.
+taskSchema.index({ userId: 1, createdAt: -1 });
 
+module.exports = mongoose.model('Task', taskSchema);

@@ -1,75 +1,150 @@
-const { connectConsumer } = require('../config/kafka');
-const { createTopic } = require('../config/kafka');
+const mongoose = require('mongoose');
 const Task = require('../models/task/task');
+const { TOPICS, createConsumer, ensureTopics } = require('../config/kafka');
+const { TASK_EVENTS, pickMutableTaskFields } = require('../models/task/events');
 
-const runConsumer = async () => {
-    await createTopic(['auth-events', 'task-events']);
-    const consumer = await connectConsumer();
-    await consumer.subscribe({ topic: 'auth-events', fromBeginning: true });
-    await consumer.subscribe({ topic: 'task-events', fromBeginning: true });
+const DUPLICATE_KEY_ERROR = 11000;
+const RESTART_DELAY_MS = 10000;
+const PARTITIONS_CONSUMED_CONCURRENTLY = Number(process.env.KAFKA_CONSUMER_CONCURRENCY || 3);
 
-    await consumer.run({
-        sessionTimeout: 30000,
-        heartbeatInterval: 3000, 
-        eachMessage: async ({ topic, partition, message }) => {
-            if (!message.key || !message.value) {
-                console.error('Invalid message: key or value is null', { key: message.key, value: message.value });
-                return;
-            }
+let consumer = null;
+let restartTimer = null;
+let stopped = false;
 
-            let eventType = message.key.toString();
-            let eventData;
+// Kafka delivers at least once, so every branch must be safe to replay.
+const handleTaskEvent = async (eventType, event) => {
+    const filter = { _id: event.taskId, userId: event.userId };
+
+    switch (eventType) {
+        case TASK_EVENTS.CREATE:
             try {
-                eventData = JSON.parse(message.value.toString());
-            } catch (e) {
-                console.error('Failed to parse message value:', e, 'Value:', message.value.toString());
-                return;
-            }
-
-            // Handle old format where event was in value
-            if (eventData.event) {
-                eventType = eventData.event;
-            }
-
-            try {
-                if (topic === 'auth-events') {
-                    // Handle auth events: user_signed_up, user_logged_in, etc.
-                    console.log('Auth event processed:', eventType);
-                    // Add logic here if needed (e.g., analytics)
-                } else if (topic === 'task-events') {
-                    // Handle task events: task_create_request, task_update_request, task_delete_request
-                    if (eventType === 'task_create_request') {
-                        const task = new Task({
-                            ...eventData.taskData,
-                            userId: eventData.userId,
-                        });
-                        await task.save();
-                    } else if (eventType === 'task_update_request') {
-                        const task = await Task.findOneAndUpdate(
-                            { _id: eventData.taskId, userId: eventData.userId },
-                            eventData.updateData,
-                            { new: true }
-                        );
-                        if (task) {
-                            console.log('Task updated:', task._id);
-                        } else {
-                            console.log('Task not found for update:', eventData.taskId);
-                        }
-                    } else if (eventType === 'task_delete_request') {
-                        const task = await Task.findOneAndDelete({ _id: eventData.taskId, userId: eventData.userId });
-                        if (task) {
-                            console.log('Task deleted:', task._id);
-                        } else {
-                            console.log('Task not found for delete:', eventData.taskId);
-                        }
-                    }
-                }
+                await Task.create({
+                    ...pickMutableTaskFields(event.data),
+                    _id: event.taskId,
+                    userId: event.userId,
+                    clientTaskId: event.clientTaskId,
+                });
             } catch (error) {
-                console.error('Error processing event:', error);
-                // In production, implement retry or dead letter queue
+                if (error.code !== DUPLICATE_KEY_ERROR) {
+                    throw error;
+                }
+
+                console.info('Task create already applied, skipping:', event.taskId, error.keyPattern);
             }
-        },
-    });
+            return;
+
+        case TASK_EVENTS.UPDATE: {
+            const result = await Task.updateOne(
+                filter,
+                { $set: pickMutableTaskFields(event.data) },
+                { runValidators: true }
+            );
+
+            if (result.matchedCount === 0) {
+                console.warn('Task not found for update:', event.taskId);
+            }
+            return;
+        }
+
+        case TASK_EVENTS.DELETE: {
+            const result = await Task.deleteOne(filter);
+
+            if (result.deletedCount === 0) {
+                console.warn('Task not found for delete:', event.taskId);
+            }
+            return;
+        }
+
+        default:
+            console.warn('Unknown task event type, skipping:', eventType);
+    }
 };
 
-module.exports = { runConsumer };
+// Retrying these can never succeed, so they must not block the partition.
+const isPermanentError = (error) =>
+    error instanceof mongoose.Error.ValidationError || error instanceof mongoose.Error.CastError;
+
+const handleMessage = async ({ topic, partition, message }) => {
+    const eventType = message.headers && message.headers.eventType && message.headers.eventType.toString();
+    const eventId = message.headers && message.headers.eventId && message.headers.eventId.toString();
+    const location = { topic, partition, offset: message.offset, eventType, eventId };
+
+    let event;
+    try {
+        event = JSON.parse(message.value.toString());
+    } catch (error) {
+        console.error('Skipping unparseable message', location);
+        return;
+    }
+
+    if (topic === TOPICS.AUTH_EVENTS) {
+        console.log('Auth event processed:', eventType);
+        return;
+    }
+
+    try {
+        await handleTaskEvent(eventType, event);
+    } catch (error) {
+        if (!isPermanentError(error)) {
+            // Transient (e.g. MongoDB unavailable): rethrow so kafkajs retries from this offset instead of
+            // committing past it and losing a write the API already acknowledged with 202.
+            throw error;
+        }
+
+        // Poison message. Logged with its offset for manual replay; a dead-letter topic is the next step if this shows up.
+        console.error('Skipping invalid task event', { ...location, error: error.message });
+    }
+};
+
+const scheduleRestart = () => {
+    if (stopped || restartTimer) {
+        return;
+    }
+
+    restartTimer = setTimeout(() => {
+        restartTimer = null;
+        runConsumer();
+    }, RESTART_DELAY_MS);
+};
+
+const runConsumer = async () => {
+    const instance = createConsumer();
+    consumer = instance;
+
+    // kafkajs restarts itself after retriable failures. Anything else would leave tasks unconsumed until the next deploy.
+    instance.on(instance.events.CRASH, ({ payload }) => {
+        if (!payload.restart) {
+            console.error('Kafka consumer crashed, restarting:', payload.error && payload.error.message);
+            instance.disconnect().catch(() => {}).finally(scheduleRestart);
+        }
+    });
+
+    try {
+        await ensureTopics();
+        await instance.connect();
+        await instance.subscribe({ topics: [TOPICS.AUTH_EVENTS, TOPICS.TASK_EVENTS], fromBeginning: true });
+        await instance.run({
+            partitionsConsumedConcurrently: PARTITIONS_CONSUMED_CONCURRENTLY,
+            eachMessage: handleMessage,
+        });
+        console.log('Kafka consumer running');
+    } catch (error) {
+        console.error('Failed to start Kafka consumer, retrying:', error.message);
+        await instance.disconnect().catch(() => {});
+        scheduleRestart();
+    }
+};
+
+const stopConsumer = async () => {
+    stopped = true;
+    clearTimeout(restartTimer);
+    restartTimer = null;
+
+    if (consumer) {
+        const instance = consumer;
+        consumer = null;
+        await instance.disconnect();
+    }
+};
+
+module.exports = { runConsumer, stopConsumer, handleMessage };

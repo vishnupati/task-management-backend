@@ -14,7 +14,21 @@ ACCESS_TOKEN_TTL_SECONDS=1800
 REFRESH_TOKEN_TTL_SECONDS=1800
 MAX_DEVICE_LOGINS=3
 GOOGLE_CLIENT_ID=your-google-oauth-client-id
+FRONTEND_URL=http://localhost:4200
+# Optional comma-separated CORS allowlist (defaults to FRONTEND_URL)
+CORS_ORIGINS=http://localhost:4200
+
+# Kafka: comma-separated brokers. Setting KAFKA_USERNAME enables SASL_SSL (Aiven);
+# leave it unset for the plaintext broker in docker-compose.yml.
+KAFKA_BROKERS=localhost:9092
+KAFKA_USERNAME=
+KAFKA_PASSWORD=
+AIVEN_KAFKA_CA_PATH=../ca.pem
+# Optional: KAFKA_SASL_MECHANISM (scram-sha-256), KAFKA_CONSUMER_GROUP_ID, KAFKA_TOPIC_PARTITIONS (3),
+# KAFKA_TOPIC_REPLICATION_FACTOR (1), KAFKA_CONSUMER_CONCURRENCY (3)
 ```
+
+Local Kafka + MongoDB: `docker compose up -d`. Tests: `npm test`.
 
 ## Auth Endpoints
 
@@ -84,8 +98,20 @@ Auth tokens are also returned in HTTP-only cookies:
 
 All task endpoints now require `Authorization: Bearer <token>` and are scoped per authenticated user.
 
-- `GET /api/tasks`
+- `GET /api/tasks` (newest first)
 - `GET /api/tasks/:id`
 - `POST /api/tasks`
+	- body: `{ "title": "...", "description"?: "...", "status"?: "...", "clientTaskId"?: "<uuid>" }`
+	- `202 { message, id, clientTaskId, status: "queued", eventId }`
 - `PATCH /api/tasks/:id`
+	- body: at least one of `title`, `description`, `status`
+	- `202 { message, eventId }`
 - `DELETE /api/tasks/:id`
+	- `202 { message, eventId }`
+
+Writes are queued on Kafka (`task-events`, keyed by user so a user's writes apply in order) and applied by
+`workers/event-consumer.js`, so they are eventually consistent: `GET /api/tasks/:id` returns 404 until the
+create has been applied (normally milliseconds). The returned `id` can be used immediately for PATCH/DELETE.
+Send a `clientTaskId` to make create retries safe: the same `clientTaskId` always maps to the same task `id`.
+
+Validation errors return `400 { message, errors: [...] }`.

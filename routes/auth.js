@@ -54,12 +54,21 @@ router.get('/github/callback', async (req, res) => {
 
         // 3. Call your existing SSO handler
         // It will create JWT access + refresh tokens
+        let ssoStatus = 200;
         const jsonResponse = await sso(req, {
-            status: (statusCode) => ({
-                json: (data) => data,
-            }),
+            status: (statusCode) => {
+                ssoStatus = statusCode;
+                return { json: (data) => data };
+            },
             cookie: res.cookie.bind(res),
         });
+
+        // sso() reports failures (bad code, device quota reached) via status, not by throwing.
+        if (ssoStatus !== 200) {
+            return res.redirect(
+                `${process.env.FRONTEND_URL || 'http://localhost:4200'}/oauth-error?message=${encodeURIComponent(jsonResponse.message || 'OAuth authentication failed')}`
+            );
+        }
 
         const { access_token, refresh_token, user } = jsonResponse;
 

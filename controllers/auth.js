@@ -4,7 +4,7 @@ const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/user/user');
 const RefreshToken = require('../models/auth/refresh-token');
-const { publish } = require('../config/kafka');
+const { publish, TOPICS } = require('../config/kafka');
 
 const maxDeviceLogins = Number(process.env.MAX_DEVICE_LOGINS || 3);
 const sessionTtlSeconds = Number(process.env.SESSION_TTL_SECONDS || 60 * 30);
@@ -14,11 +14,26 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 const maxDeviceMessage = 'reached maxiamum login quata , if you want to login this device logout other devices';
 
+const isProduction = process.env.NODE_ENV === 'production';
+const DUPLICATE_KEY_ERROR = 11000;
+
 const authCookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'none',
+    secure: isProduction,
+    // Browsers drop SameSite=None cookies that aren't Secure, which silently broke cookie auth outside production.
+    sameSite: isProduction ? 'none' : 'lax',
     path: '/',
+};
+
+// Auth events are analytics-only, so publish in the background: login/refresh latency no longer includes
+// a Kafka round trip. Trade-off: an event can be lost if Kafka is down or the process dies mid-send.
+const publishAuthEvent = (event, message) => {
+    publish({
+        topic: TOPICS.AUTH_EVENTS,
+        event,
+        key: String(message.userId),
+        message: { ...message, timestamp: new Date() },
+    }).catch((error) => console.error(`Kafka publish error (${event}):`, error.message));
 };
 
 const signAccessToken = (user) =>
@@ -263,35 +278,31 @@ const signup = async (req, res) => {
         const { name, email, password } = req.body;
         const normalizedEmail = email.toLowerCase();
 
-        const existingUser = await User.findOne({ email: normalizedEmail });
-        if (existingUser) {
-            return res.status(409).json({ message: 'User already exists' });
+        // The unique email index is the check: no extra lookup, and concurrent signups can't both succeed.
+        let user;
+        try {
+            user = await User.create({
+                name,
+                email: normalizedEmail,
+                password,
+                authProvider: 'local',
+            });
+        } catch (error) {
+            if (error.code === DUPLICATE_KEY_ERROR) {
+                return res.status(409).json({ message: 'User already exists' });
+            }
+            throw error;
         }
-
-        const user = await User.create({
-            name,
-            email: normalizedEmail,
-            password,
-            authProvider: 'local',
-        });
 
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
 
-        // Publish event to Kafka
-        try {
-            await publish({
-                topic: 'auth-events',
-                event: 'user_signed_up',
-                message: { userId: user._id, email: user.email, timestamp: new Date() },
-            });
-        } catch (kafkaError) {
-            console.error('Kafka publish error:', kafkaError);
-        }
+        publishAuthEvent('user_signed_up', { userId: user._id, email: user.email });
 
         return res.status(201).json(toAuthResponse(user, tokens));
     } catch (error) {
-        return res.status(500).json({ message: error.message });
+        console.error('Signup failed:', error);
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -318,20 +329,12 @@ const login = async (req, res) => {
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
 
-        // Publish event to Kafka
-        try {
-            await publish({
-                topic: 'auth-events',
-                event: 'user_logged_in',
-                message: { userId: user._id, email: user.email, timestamp: new Date() },
-            });
-        } catch (kafkaError) {
-            console.error('Kafka publish error:', kafkaError);
-        }
+        publishAuthEvent('user_logged_in', { userId: user._id, email: user.email });
 
         return res.status(200).json(toAuthResponse(user, tokens));
     } catch (error) {
-        return res.status(500).json({ message: error.message });
+        console.error('Login failed:', error);
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -356,20 +359,12 @@ const forceLogin = async (req, res) => {
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
 
-        // Publish event to Kafka
-        try {
-            await publish({
-                topic: 'auth-events',
-                event: 'user_force_logged_in',
-                message: { userId: user._id, email: user.email, timestamp: new Date() },
-            });
-        } catch (kafkaError) {
-            console.error('Kafka publish error:', kafkaError);
-        }
+        publishAuthEvent('user_force_logged_in', { userId: user._id, email: user.email });
 
         return res.status(200).json(toAuthResponse(user, tokens));
     } catch (error) {
-        return res.status(500).json({ message: error.message });
+        console.error('Force login failed:', error);
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -408,16 +403,7 @@ const sso = async (req, res) => {
         const tokens = await issueTokenPair(user);
         setAuthCookies(res, tokens);
 
-        // Publish event to Kafka
-        try {
-            await publish({
-                topic: 'auth-events',
-                event: 'user_sso_login',
-                message: { userId: user._id, email: user.email, provider: provider, timestamp: new Date() },
-            });
-        } catch (kafkaError) {
-            console.error('Kafka publish error:', kafkaError);
-        }
+        publishAuthEvent('user_sso_login', { userId: user._id, email: user.email, provider });
 
         return res.status(200).json(toAuthResponse(user, tokens));
     } catch (error) {
@@ -444,7 +430,11 @@ const refreshToken = async (req, res) => {
             return res.status(401).json({ message: 'Invalid refresh token' });
         }
 
-        const tokenDoc = await RefreshToken.findOne({ jti: decoded.jti });
+        // Independent lookups: run them in one round trip instead of two.
+        const [tokenDoc, user] = await Promise.all([
+            RefreshToken.findOne({ jti: decoded.jti }),
+            User.findById(decoded.sub).lean(),
+        ]);
 
         if (!tokenDoc) {
             await revokeAllUserRefreshTokens(decoded.sub);
@@ -460,7 +450,6 @@ const refreshToken = async (req, res) => {
             return res.status(401).json({ message: 'Invalid refresh token' });
         }
 
-        const user = await User.findById(decoded.sub);
         if (!user) {
             return res.status(401).json({ message: 'Invalid refresh token' });
         }
@@ -468,16 +457,7 @@ const refreshToken = async (req, res) => {
         const tokens = await rotateRefreshTokenPair(user, tokenDoc);
         setAuthCookies(res, tokens);
 
-        // Publish event to Kafka
-        try {
-            await publish({
-                topic: 'auth-events',
-                event: 'token_refreshed',
-                message: { userId: user._id, email: user.email, timestamp: new Date() },
-            });
-        } catch (kafkaError) {
-            console.error('Kafka publish error:', kafkaError);
-        }
+        publishAuthEvent('token_refreshed', { userId: user._id, email: user.email });
 
         return res.status(200).json(toAuthResponse(user, tokens));
     } catch (error) {
@@ -515,16 +495,7 @@ const revokeToken = async (req, res) => {
             tokenDoc.revokedAt = new Date();
             await tokenDoc.save();
 
-            // Publish event to Kafka
-            try {
-                await publish({
-                    topic: 'auth-events',
-                    event: 'token_revoked',
-                    message: { userId: decoded.sub, jti: decoded.jti, timestamp: new Date() },
-                });
-            } catch (kafkaError) {
-                console.error('Kafka publish error:', kafkaError);
-            }
+            publishAuthEvent('token_revoked', { userId: decoded.sub, jti: decoded.jti });
         }
 
         clearAuthCookies(res);
@@ -537,7 +508,7 @@ const revokeToken = async (req, res) => {
 
 const me = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user.id).select('name email authProvider').lean();
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -552,7 +523,8 @@ const me = async (req, res) => {
             },
         });
     } catch (error) {
-        return res.status(500).json({ message: error.message });
+        console.error('Failed to load current user:', error);
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
