@@ -79,6 +79,41 @@ import cycle. Tests stub functions on the module that defines them (`lib/kafka`)
 Types go in `types/`, except mongoose model interfaces and the task event types: those stay next to the schema
 or constants they are built from, so the two can't drift apart.
 
+## Kafka
+
+Task writes go through Kafka: the API publishes to `task-events` and answers `202`, and
+`src/workers/event-consumer.ts` applies them to MongoDB.
+
+Topics are created at startup when missing (auto-creation is off, as on Aiven):
+
+| Topic | Key | Purpose |
+|---|---|---|
+| `task-events` | userId | task create/update/delete requests |
+| `task-events-dlq` | userId | task events that can never be applied (see Failures); nothing consumes it |
+| `auth-events` | userId | signup/login analytics |
+| `health-check` | none | keeps Aiven's free tier from powering Kafka off |
+
+Partitions come from `KAFKA_TOPIC_PARTITIONS` (2, the Aiven free-tier maximum) and replication from
+`KAFKA_TOPIC_REPLICATION_FACTOR` (1). On a cluster with 3+ brokers use 3: new topics then get
+`min.insync.replicas=2`, so writes keep working, without losing acknowledged data, while one broker is down. Both
+only apply when a topic is created. Retention is the broker default; keep it long enough to inspect the DLQ.
+
+- **Delivery is at-least-once.** The producer waits for all in-sync replicas (`acks=-1`) and kafkajs retries
+  transient failures. The worker's offset only moves once a write is applied, so a crash means redelivery, never
+  loss. Every handler is idempotent (a create carries its `_id`, updates and deletes can be repeated), so
+  duplicates are harmless. Deliberately not used: the idempotent producer (experimental in kafkajs, and it retries
+  forever, so a publish during an outage would hang the request instead of returning `503`) and transactions
+  (exactly-once only covers writes to Kafka, not the MongoDB write).
+- **Ordering:** a user's events share a key, hence a partition, so they are applied in the order they were accepted.
+- **Failures:** transient errors (e.g. MongoDB down) are retried from the same offset. An event that can never
+  succeed (unparseable, malformed, unknown type, rejected by schema validation) is copied unchanged to
+  `task-events-dlq` with `dlqReason`, `dlqSource` (`topic/partition/offset`) and `dlqFailedAt` headers, then
+  skipped so it doesn't block its partition. To replay one, fix the cause and produce it back to `task-events`
+  with its original key and headers. If the dead-letter write fails too, the event is logged with its offset.
+- **Monitoring:** kafkajs logs partition assignments and rebalances. Watch the consumer lag of
+  `task-management-group` with your Kafka tooling (e.g. Kafka UI or Burrow): lag that keeps growing means the
+  worker is stuck or falling behind. Any record in `task-events-dlq` needs a look.
+
 ## Caching
 
 `GET /api/tasks` and `GET /api/auth/me` are served from Redis when `REDIS_URL` is set. The response header
