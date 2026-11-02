@@ -1,0 +1,28 @@
+import axios from 'axios';
+import type { OAuthIdentity, TwitterUserResponse } from '../types';
+
+export const verifyTwitterIdentity = async (accessToken: string): Promise<OAuthIdentity> => {
+    const response = await axios.get<TwitterUserResponse | null>('https://api.twitter.com/2/users/me', {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+        },
+        params: {
+            'user.fields': 'id,name,username',
+        },
+    });
+
+    const twitterUser = response.data && response.data.data;
+
+    if (!twitterUser || !twitterUser.id) {
+        throw new Error('Invalid Twitter token');
+    }
+
+    const usernameOrId = twitterUser.username || twitterUser.id;
+    const resolvedEmail = (twitterUser.email || `${usernameOrId}@twitter.local`).toLowerCase();
+
+    return {
+        email: resolvedEmail,
+        name: twitterUser.name || twitterUser.username || resolvedEmail,
+        providerId: String(twitterUser.id),
+    };
+};

@@ -1,21 +1,17 @@
 import type { Request, Response } from 'express';
 import {
     AuthError,
-    exchangeGithubCode,
     forceLoginWithPassword,
     getUserProfile,
+    loginWithGithubCode,
     loginWithPassword,
     loginWithSso,
     refreshSession,
     registerUser,
     revokeSession,
-    type AuthErrorReason,
-    type AuthSession,
-    type SessionUser,
-    type SsoPayload,
-    type TokenPair,
 } from '../services';
 import { getAuthUser } from '../middlewares';
+import type { AuthErrorReason, AuthResponse, AuthSession, SsoPayload, TokenPair } from '../types';
 import { getErrorMessage } from '../utils';
 import { config } from '../config';
 
@@ -34,16 +30,6 @@ const authErrorResponses: Record<AuthErrorReason, { status: number; message: str
     invalid_credentials: { status: 401, message: 'Invalid credentials' },
     device_quota: { status: 409, message: maxDeviceMessage },
 };
-
-// OAuth2-style body of every successful login and refresh.
-interface AuthResponse {
-    access_token: string;
-    refresh_token: string;
-    token_type: 'Bearer';
-    expires_in: number;
-    token: string;
-    user: SessionUser;
-}
 
 const toAuthResponse = ({ user, tokens }: AuthSession): AuthResponse => ({
     access_token: tokens.accessToken,
@@ -163,17 +149,7 @@ export const ssoByProvider = async (req: Request, res: Response) => sso(req, res
 // GitHub's OAuth redirect lands here with a code; the outcome goes back to the frontend as a redirect.
 export const githubCallback = async (req: Request, res: Response) => {
     try {
-        const accessToken = await exchangeGithubCode(req.query.code);
-
-        let session: AuthSession;
-        try {
-            session = await loginWithSso({ provider: 'github', accessToken });
-        } catch (error) {
-            // The same failures POST /sso reports with a status code.
-            const message = error instanceof AuthError ? authErrorResponses[error.reason].message : ssoFailureMessage(error);
-            return redirectToOAuthError(res, message);
-        }
-
+        const session = await loginWithGithubCode(req.query.code);
         setAuthCookies(res, session.tokens);
 
         // ⚠️ Do NOT send accessToken in URL in production (optional: use HttpOnly cookies)
@@ -181,9 +157,15 @@ export const githubCallback = async (req: Request, res: Response) => {
         return res.redirect(
             `${config.frontendUrl}/auth/callback?access_token=${access_token}&refresh_token=${refresh_token}&user=${encodeURIComponent(JSON.stringify(user))}`
         );
-    } catch (err) {
-        console.error(err);
-        return redirectToOAuthError(res, getErrorMessage(err));
+    } catch (error) {
+        // The same failures POST /sso reports with a status code.
+        if (error instanceof AuthError) {
+            return redirectToOAuthError(res, authErrorResponses[error.reason].message);
+        }
+
+        // The message only: a failed code exchange carries the request, GitHub client secret included.
+        console.error('GitHub login failed:', getErrorMessage(error));
+        return redirectToOAuthError(res, ssoFailureMessage(error));
     }
 };
 

@@ -1,6 +1,7 @@
 import fs from 'fs';
-import { Kafka, Partitioners, logLevel, type IHeaders, type KafkaConfig, type Producer, type SASLOptions } from 'kafkajs';
+import { Kafka, Partitioners, logLevel, type KafkaConfig, type Producer, type SASLOptions } from 'kafkajs';
 import { config } from '../config';
+import type { PublishOptions } from '../types';
 import { getErrorMessage } from '../utils';
 
 export const TOPICS = {
@@ -137,14 +138,6 @@ export const disconnectProducer = async (): Promise<void> => {
         // Never connected, nothing to release.
     }
 };
-
-export interface PublishOptions {
-    topic: string;
-    event: string;
-    message: unknown;
-    key?: string | null;
-    headers?: IHeaders;
-}
 
 export const publish = async ({ topic, event, message, key = null, headers = {} }: PublishOptions): Promise<void> => {
     const producer = await waitForProducer();

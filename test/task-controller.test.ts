@@ -5,10 +5,11 @@ import mongoose from 'mongoose';
 import * as kafka from '../src/lib/kafka';
 import { createTask, updateTask } from '../src/controllers/task';
 import { TASK_EVENTS, type TaskEventMessage } from '../src/models/task/events';
+import type { PublishOptions } from '../src/types';
 
 // Services reach publish through the lib barrel, which reads it from the kafka module on every call, so stubbing it
 // on the module works. (The barrel's own exports are getters and can't be stubbed.)
-const publish = mock.method(kafka, 'publish', async (_options: kafka.PublishOptions) => {});
+const publish = mock.method(kafka, 'publish', async (_options: PublishOptions) => {});
 
 const userId = new mongoose.Types.ObjectId().toString();
 

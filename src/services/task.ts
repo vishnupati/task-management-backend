@@ -1,13 +1,8 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { Task, TASK_EVENTS, pickMutableTaskFields, type TaskEventMessage, type TaskEventType } from '../models';
-import { TOPICS, cacheKeys, publish, readThrough, type ReadThroughResult } from '../lib';
-
-export interface QueuedTaskCreate {
-    taskId: string;
-    clientTaskId: string;
-    eventId: string;
-}
+import { TOPICS, cacheKeys, publish, readThrough } from '../lib';
+import type { QueuedTaskCreate, ReadThroughResult } from '../types';
 
 // Writes are applied asynchronously by workers/event-consumer.ts. Every event is keyed by userId so a
 // user's create/update/delete land on the same partition and are applied in the order they were accepted.

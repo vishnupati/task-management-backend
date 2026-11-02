@@ -1,9 +1,8 @@
 import type { Request, Response } from 'express';
 import { getTask, getTaskList, queueTaskCreate, queueTaskDelete, queueTaskUpdate } from '../services';
 import { getAuthUser } from '../middlewares';
+import type { TaskIdParams } from '../types';
 import { getErrorMessage } from '../utils';
-
-type TaskIdParams = { id: string };
 
 // Publish failures mean the write queue is unreachable, not a bad request: 503 tells clients to retry
 // (safe for creates that carry a clientTaskId, and for updates/deletes).

@@ -1,20 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
-
-export interface AuthUser {
-    id: string;
-    email?: string;
-}
-
-declare global {
-    namespace Express {
-        interface Request {
-            // Set by authenticate.
-            user?: AuthUser;
-        }
-    }
-}
+import type { AuthUser } from '../types';
 
 // Stateless: the signed access token is trusted for its (short) lifetime, so authenticated requests
 // don't pay a MongoDB round trip. Endpoints that need the full user (e.g. /me) load it themselves.

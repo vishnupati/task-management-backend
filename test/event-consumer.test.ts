@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Task from '../src/models/task/task';
 import { TASK_EVENTS } from '../src/models/task/events';
 import * as cache from '../src/lib/cache';
+import type { CacheKey } from '../src/types';
 import { handleMessage } from '../src/workers/event-consumer';
 
 const userId = new mongoose.Types.ObjectId().toString();
@@ -11,7 +12,7 @@ const taskId = new mongoose.Types.ObjectId().toString();
 
 // The worker reaches invalidate through the lib barrel, which reads it from the cache module on every call, so
 // stubbing it on the module works. (The barrel's own exports are getters and can't be stubbed.)
-const stubInvalidate = () => mock.method(cache, 'invalidate', async (_keys: cache.CacheKey) => {});
+const stubInvalidate = () => mock.method(cache, 'invalidate', async (_keys: CacheKey) => {});
 let invalidate: ReturnType<typeof stubInvalidate>;
 
 const kafkaMessage = (eventType: string, event: object) => ({

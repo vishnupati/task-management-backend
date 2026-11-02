@@ -59,7 +59,8 @@ src/
   config/        every environment variable, parsed and validated into a typed config object
   routes/        URL → validators and middleware → controller; index.ts mounts each feature router under /api
   controllers/   HTTP only: read the request, call a service, write the response
-  services/      business logic: auth sessions, tokens and OAuth; task commands and queries
+  services/      business logic: auth sessions, tokens and SSO login; task commands and queries
+  integrations/  third-party APIs (Google, GitHub, Facebook, Twitter), normalized for the services
   validators/    express-validator request rules
   middlewares/   authenticate, validateRequest
   models/        mongoose models and the task event contract
@@ -67,12 +68,16 @@ src/
   workers/       Kafka consumer that applies task writes
   jobs/          scheduled jobs (Kafka keep-alive)
   utils/         small shared helpers
+  types/         shared TypeScript types, plus the Express (req.user) and ioredis augmentations
 test/            node:test suites, run against the compiled output
 ```
 
 Each folder has an `index.ts` that exposes its public API (for `routes/`, the combined `/api` router). Import another folder through it (`from '../lib'`),
 and files in the same folder directly (`from './events'`): a module importing its own folder's index creates an
 import cycle. Tests stub functions on the module that defines them (`lib/kafka`), not on the index.
+
+Types go in `types/`, except mongoose model interfaces and the task event types: those stay next to the schema
+or constants they are built from, so the two can't drift apart.
 
 ## Caching
 

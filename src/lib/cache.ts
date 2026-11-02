@@ -1,25 +1,13 @@
 import crypto from 'crypto';
-import Redis, { type Result } from 'ioredis';
+import Redis from 'ioredis';
 import { config } from '../config';
+import type { CacheKey, ReadThroughOptions, ReadThroughResult } from '../types';
 import { getErrorMessage } from '../utils';
-
-declare module 'ioredis' {
-    interface RedisCommander<Context> {
-        setIfVersion(versionKey: string, key: string, version: string, value: string, ttlSeconds: number): Result<number, Context>;
-    }
-}
 
 // Read-through cache on Redis. Strictly an optimization: every failure path falls back to the loader,
 // and the app runs without it when REDIS_URL is unset.
 const VERSION_TTL_SECONDS = 24 * 60 * 60;
 const ERROR_LOG_INTERVAL_MS = 30000;
-
-export interface CacheKey {
-    key: string;
-    versionKey: string;
-}
-
-export type CacheStatus = 'HIT' | 'MISS' | 'BYPASS';
 
 export const cacheKeys = {
     taskList: (userId: string): CacheKey => ({ key: `tm:tasks:${userId}:list`, versionKey: `tm:tasks:${userId}:ver` }),
@@ -53,6 +41,7 @@ const createClient = (): Redis | null => {
 
     // Store a value only if its key wasn't invalidated while it was being loaded. Without this check, a read
     // that started before a write could repopulate the cache with pre-write data after the write invalidated it.
+    // Its TypeScript signature is declared in types/ioredis.ts.
     redis.defineCommand('setIfVersion', {
         numberOfKeys: 2,
         lua: `
@@ -76,16 +65,6 @@ const client = createClient();
 const isReady = (redis: Redis | null): redis is Redis => redis !== null && redis.status === 'ready';
 
 const serialize = (value: unknown): string | null => (value === null || value === undefined ? null : JSON.stringify(value));
-
-export interface ReadThroughOptions<T> extends CacheKey {
-    load: () => PromiseLike<T>;
-    ttlSeconds?: number;
-}
-
-export interface ReadThroughResult {
-    body: string | null;
-    status: CacheStatus;
-}
 
 // Returns the JSON body as a string so hits are sent without a parse/stringify round trip.
 // status: HIT | MISS | BYPASS (cache disabled or unavailable). A null result is never cached.
