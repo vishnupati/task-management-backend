@@ -48,7 +48,8 @@ in `dist/`.
 - `npm start`: run the compiled build (`npm run build` first; deployments need it as the build step)
 - `npm run typecheck`: type-check everything, tests included
 - `npm test`: compile, then run the tests against the compiled output
-  (add `REDIS_TEST_URL=redis://localhost:6379` to also run the Redis integration tests)
+  (add `REDIS_TEST_URL=redis://localhost:6379` and/or `MONGO_TEST_URL=mongodb://localhost:27017/task-management-test`
+  to also run the Redis and MongoDB integration tests; the MongoDB ones wipe users, so use a throwaway database)
 
 ## Project structure
 
@@ -191,6 +192,20 @@ Auth tokens are also returned in HTTP-only cookies:
 - If a revoked/invalid refresh token is reused, active refresh sessions for that user are revoked.
 - Maximum active device sessions per user is 3 (configurable via `MAX_DEVICE_LOGINS`).
 - Default auto-logout/session timeout is 30 minutes (`SESSION_TTL_SECONDS=1800`).
+
+### SSO account linking
+
+One account per person. Each account records the provider logins linked to it (`identities`).
+
+- A Google or GitHub login whose email matches an existing account joins that account, because those providers
+  verify the address. Signing in with Google and later with GitHub using the same email shows the same tasks.
+- Facebook and Twitter logins are never linked by email (Facebook doesn't say whether the address is verified;
+  Twitter's is made up from the account id). They get their own account, and if their email already belongs to
+  another account the login is refused with `409`.
+- An email + password account is never joined by an SSO login, since its email was never verified. A Google or
+  GitHub login with that email gets `409`: sign in with the password instead.
+- Accounts created before identities existed are recognized by their last provider id and migrate on their next
+  login; there is no migration script.
 
 ## Tasks Endpoints
 

@@ -29,6 +29,7 @@ const authErrorResponses: Record<AuthErrorReason, { status: number; message: str
     user_exists: { status: 409, message: 'User already exists' },
     invalid_credentials: { status: 401, message: 'Invalid credentials' },
     device_quota: { status: 409, message: maxDeviceMessage },
+    email_in_use: { status: 409, message: 'This email is already registered. Sign in with the method you used before.' },
 };
 
 const toAuthResponse = ({ user, tokens }: AuthSession): AuthResponse => ({

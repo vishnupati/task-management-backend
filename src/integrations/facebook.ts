@@ -19,6 +19,8 @@ export const verifyFacebookIdentity = async (accessToken: string): Promise<OAuth
 
     return {
         email: resolvedEmail,
+        // The Graph API doesn't say whether the address was confirmed.
+        emailVerified: false,
         name: facebookUser.name || resolvedEmail,
         providerId: String(facebookUser.id),
     };

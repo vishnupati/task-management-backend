@@ -22,6 +22,7 @@ export const verifyGoogleIdentity = async (idToken: string): Promise<OAuthIdenti
 
     return {
         email: payload.email.toLowerCase(),
+        emailVerified: true,
         name: payload.name || payload.email,
         providerId: payload.sub,
     };

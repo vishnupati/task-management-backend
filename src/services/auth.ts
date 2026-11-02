@@ -10,7 +10,7 @@ import {
     verifyTwitterIdentity,
 } from '../integrations';
 import { TOPICS, cacheKeys, invalidate, publish, readThrough } from '../lib';
-import { RefreshToken, User, type IRefreshToken } from '../models';
+import { RefreshToken, User, type IRefreshToken, type IUser } from '../models';
 import type {
     AuthErrorReason,
     AuthSession,
@@ -178,6 +178,83 @@ const verifyOAuthIdentity = async ({ provider, idToken, accessToken }: SsoPayloa
     return verifyTwitterIdentity(accessToken);
 };
 
+// The account an SSO login belongs to: the one its identity is linked to (or, for accounts from before identities
+// were tracked, whose latest SSO login it was); otherwise the account with the same email, but only when the
+// provider verified that email and the account has no password.
+const findSsoUser = async (provider: string, identity: OAuthIdentity) => {
+    const known = await User.findOne({
+        $or: [
+            { identities: { $elemMatch: { provider, providerId: identity.providerId } } },
+            { authProvider: provider, providerId: identity.providerId },
+        ],
+    });
+    if (known || !identity.emailVerified) {
+        return known;
+    }
+
+    const sameEmail = await User.findOne({ email: identity.email }).select('+password');
+    // Password signups never verify their email, so someone could register a victim's address first and keep the
+    // password; linking the victim's Google/GitHub login to that account would hand it to them.
+    return sameEmail && !sameEmail.password ? sameEmail : null;
+};
+
+const linkIdentity = async (
+    user: Pick<IUser, 'name' | 'authProvider' | 'providerId'> & { _id: Types.ObjectId },
+    provider: string,
+    identity: OAuthIdentity
+) => {
+    const identities = [{ provider, providerId: identity.providerId }];
+    // An account from before identities knows its previous provider only through authProvider/providerId, which this
+    // update overwrites: carry that pair over, or the provider could find the account again only by email.
+    if (user.providerId) {
+        identities.unshift({ provider: user.authProvider, providerId: user.providerId });
+    }
+
+    const linked = await User.findOneAndUpdate(
+        { _id: user._id },
+        {
+            $set: { name: identity.name || user.name, authProvider: provider, providerId: null },
+            // Idempotent, so concurrent logins can't add an identity twice.
+            $addToSet: { identities: { $each: identities } },
+        },
+        { new: true }
+    );
+    if (!linked) {
+        throw new Error('Account was deleted during SSO login');
+    }
+
+    await invalidate(cacheKeys.userProfile(linked._id.toString()));
+    return linked;
+};
+
+const findOrCreateSsoUser = async (provider: string, identity: OAuthIdentity) => {
+    const existing = await findSsoUser(provider, identity);
+    if (existing) {
+        return linkIdentity(existing, provider, identity);
+    }
+
+    try {
+        return await User.create({
+            name: identity.name,
+            email: identity.email,
+            authProvider: provider,
+            identities: [{ provider, providerId: identity.providerId }],
+        });
+    } catch (error) {
+        if (!isDuplicateKeyError(error)) {
+            throw error;
+        }
+
+        // Either a concurrent first login created the account (use it), or the email belongs to an account this
+        // login may not be linked to.
+        const winner = await findSsoUser(provider, identity);
+        if (winner) {
+            return linkIdentity(winner, provider, identity);
+        }
+        throw new AuthError('email_in_use');
+    }
+};
+
 export const registerUser = async ({ name, email, password }: { name: string; email: string; password: string }): Promise<AuthSession> => {
     // The unique email index is the check: no extra lookup, and concurrent signups can't both succeed.
     let user;
@@ -246,29 +323,7 @@ export const forceLoginWithPassword = async (email: string, password: string): P
 export const loginWithSso = async (payload: SsoPayload): Promise<AuthSession> => {
     const { provider } = payload;
     const identity = await verifyOAuthIdentity(payload);
-    const normalizedEmail = identity.email;
-
-    let user = await User.findOne({
-        $or: [
-            { email: normalizedEmail },
-            { authProvider: provider, providerId: identity.providerId },
-        ],
-    });
-
-    if (!user) {
-        user = await User.create({
-            name: identity.name,
-            email: normalizedEmail,
-            authProvider: provider,
-            providerId: identity.providerId,
-        });
-    } else {
-        user.name = identity.name || user.name;
-        user.authProvider = provider;
-        user.providerId = identity.providerId;
-        await user.save();
-        await invalidate(cacheKeys.userProfile(user._id.toString()));
-    }
+    const user = await findOrCreateSsoUser(provider, identity);
 
     const reachedQuota = await hasReachedDeviceQuota(user._id);
     if (reachedQuota) {

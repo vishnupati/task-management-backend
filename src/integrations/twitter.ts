@@ -17,11 +17,12 @@ export const verifyTwitterIdentity = async (accessToken: string): Promise<OAuthI
         throw new Error('Invalid Twitter token');
     }
 
-    const usernameOrId = twitterUser.username || twitterUser.id;
-    const resolvedEmail = (twitterUser.email || `${usernameOrId}@twitter.local`).toLowerCase();
+    // No email is requested, so one is made up from the id: a username can be changed and then taken by someone else.
+    const resolvedEmail = (twitterUser.email || `${twitterUser.id}@twitter.local`).toLowerCase();
 
     return {
         email: resolvedEmail,
+        emailVerified: false,
         name: twitterUser.name || twitterUser.username || resolvedEmail,
         providerId: String(twitterUser.id),
     };

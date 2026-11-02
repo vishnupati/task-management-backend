@@ -44,6 +44,8 @@ export const verifyGithubIdentity = async (accessToken: string): Promise<OAuthId
 
     return {
         email: email.toLowerCase(),
+        // GitHub only accepts a verified address as the public profile email, and the fallback picks a verified one.
+        emailVerified: true,
         name: githubUser.name || githubUser.login || email,
         providerId: String(githubUser.id),
     };

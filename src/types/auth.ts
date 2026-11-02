@@ -7,7 +7,7 @@ export interface AuthUser {
     email?: string;
 }
 
-export type AuthErrorReason = 'user_exists' | 'invalid_credentials' | 'device_quota';
+export type AuthErrorReason = 'user_exists' | 'invalid_credentials' | 'device_quota' | 'email_in_use';
 
 // The user as returned to clients.
 export interface SessionUser {
@@ -36,6 +36,9 @@ export interface SsoPayload {
 // An OAuth provider account, normalized by integrations/.
 export interface OAuthIdentity {
     email: string;
+    // Whether the provider vouches that this account owns the email. Only then may the login be linked to an
+    // existing account with that email.
+    emailVerified: boolean;
     name: string;
     providerId: string;
 }

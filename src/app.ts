@@ -17,6 +17,9 @@ app.use(cookieParser());
 app.use(cors({
     origin: config.corsOrigins,
     credentials: true,
+    // Without it browsers re-check every request carrying an Authorization header with an OPTIONS round trip
+    // after 5 seconds; 2 hours is Chrome's upper limit.
+    maxAge: 2 * 60 * 60,
 }));
 app.use('/api', routes);
 
