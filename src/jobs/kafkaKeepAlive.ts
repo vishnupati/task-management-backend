@@ -1,8 +1,8 @@
 // jobs/kafkaKeepAlive.ts
 
 import cron from "node-cron";
-import { publish, TOPICS } from "../config/kafka";
-import { getErrorMessage } from "../utils/errors";
+import { publish, TOPICS } from "../lib";
+import { getErrorMessage } from "../utils";
 
 // Aiven's free tier powers Kafka off after 24h without produce/consume traffic. This only helps while the
 // process is running: if the host sleeps when idle (e.g. Render free instances), the cron never fires.

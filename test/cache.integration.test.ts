@@ -7,14 +7,14 @@ import Redis from 'ioredis';
 const REDIS_TEST_URL = process.env.REDIS_TEST_URL;
 const skip = !REDIS_TEST_URL && 'set REDIS_TEST_URL to run Redis integration tests';
 
-let cache: typeof import('../src/config/cache');
+let cache: typeof import('../src/lib/cache');
 let admin: Redis;
 
 before(async () => {
     if (!REDIS_TEST_URL) return;
     // Read when the module loads, so it must be set before require().
     process.env.REDIS_URL = REDIS_TEST_URL;
-    cache = require('../src/config/cache');
+    cache = require('../src/lib/cache');
     admin = new Redis(REDIS_TEST_URL);
     await cache.connectCache();
 });

@@ -1,5 +1,5 @@
 import { body, param } from 'express-validator';
-import { MUTABLE_TASK_FIELDS } from './events';
+import { MUTABLE_TASK_FIELDS } from '../models';
 
 export const validateTaskCreate = [
     body('title').isString().withMessage('Title must be a string').bail().notEmpty().withMessage('Title is required'),

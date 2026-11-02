@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { authenticate } from '../src/middlewares/auth';
 
-// Read per request, so setting it after the import is enough.
+// src/config reads the environment once, when it first loads, hence require() after setting it rather than an import.
 process.env.JWT_SECRET = 'test-secret';
+const { authenticate }: typeof import('../src/middlewares/auth') = require('../src/middlewares/auth');
 
 const run = (headers: Record<string, string>) => {
     const req = { headers, cookies: {} } as Request;

@@ -1,8 +1,7 @@
 import express from 'express';
-import { validateTaskCreate, validateTaskUpdate, validateTaskDelete, validateTaskGetById } from '../models/task/validator';
-import { getTasks, getTaskById, createTask, updateTask, deleteTask } from '../controllers/task';
-import { authenticate } from '../middlewares/auth';
-import { validateRequest } from '../middlewares/validate-request';
+import { validateTaskCreate, validateTaskUpdate, validateTaskDelete, validateTaskGetById } from '../validators';
+import { getTasks, getTaskById, createTask, updateTask, deleteTask } from '../controllers';
+import { authenticate, validateRequest } from '../middlewares';
 
 const router = express.Router();
 

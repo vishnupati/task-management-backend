@@ -2,6 +2,9 @@
 
 ## Environment Variables
 
+All environment variables are read in one place, `src/config/index.ts`, once at startup, and the rest of the code
+uses its typed `config` object. Numeric values must be numbers: the server refuses to start otherwise.
+
 Create a `.env` file with:
 
 ```env
@@ -23,7 +26,7 @@ CORS_ORIGINS=http://localhost:4200
 KAFKA_BROKERS=localhost:9092
 KAFKA_USERNAME=
 KAFKA_PASSWORD=
-# Absolute, or relative to <project root>/config (so ../ca.pem = project root). Commands must run from the project root.
+# Absolute, or relative to <project root>/config, not src/config (so ../ca.pem = project root). Run commands from the project root.
 AIVEN_KAFKA_CA_PATH=../ca.pem
 # Optional: KAFKA_SASL_MECHANISM (scram-sha-256), KAFKA_CONSUMER_GROUP_ID, KAFKA_TOPIC_PARTITIONS (2, Aiven free max),
 # KAFKA_TOPIC_REPLICATION_FACTOR (1), KAFKA_CONSUMER_CONCURRENCY (3), KAFKA_PRODUCER_CONNECT_TIMEOUT_MS (5000)
@@ -46,6 +49,30 @@ in `dist/`.
 - `npm run typecheck`: type-check everything, tests included
 - `npm test`: compile, then run the tests against the compiled output
   (add `REDIS_TEST_URL=redis://localhost:6379` to also run the Redis integration tests)
+
+## Project structure
+
+```text
+src/
+  server.ts      entry point: connects MongoDB, Redis and Kafka, starts listening, shuts down cleanly
+  app.ts         Express app (middleware and routes) with no side effects, so tests can import it
+  config/        every environment variable, parsed and validated into a typed config object
+  routes/        URL → validators and middleware → controller; index.ts mounts each feature router under /api
+  controllers/   HTTP only: read the request, call a service, write the response
+  services/      business logic: auth sessions, tokens and OAuth; task commands and queries
+  validators/    express-validator request rules
+  middlewares/   authenticate, validateRequest
+  models/        mongoose models and the task event contract
+  lib/           infrastructure clients: MongoDB, Redis cache, Kafka, Socket.io
+  workers/       Kafka consumer that applies task writes
+  jobs/          scheduled jobs (Kafka keep-alive)
+  utils/         small shared helpers
+test/            node:test suites, run against the compiled output
+```
+
+Each folder has an `index.ts` that exposes its public API (for `routes/`, the combined `/api` router). Import another folder through it (`from '../lib'`),
+and files in the same folder directly (`from './events'`): a module importing its own folder's index creates an
+import cycle. Tests stub functions on the module that defines them (`lib/kafka`), not on the index.
 
 ## Caching
 

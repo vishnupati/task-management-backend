@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import { config } from '../config';
 
 export interface AuthUser {
     id: string;
@@ -28,7 +29,7 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
-        const decoded = jwt.verify(accessToken, process.env.JWT_SECRET || 'change-me-in-env');
+        const decoded = jwt.verify(accessToken, config.auth.jwtSecret);
 
         // Refresh tokens are signed with JWT_SECRET too when JWT_REFRESH_SECRET is unset; never accept one here.
         if (typeof decoded === 'string' || !decoded.sub || decoded.type === 'refresh') {

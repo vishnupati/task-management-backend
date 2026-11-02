@@ -1,18 +1,7 @@
 import fs from 'fs';
-import path from 'path';
 import { Kafka, Partitioners, logLevel, type IHeaders, type KafkaConfig, type Producer, type SASLOptions } from 'kafkajs';
-import { getErrorMessage } from '../utils/errors';
-
-const CLIENT_ID = process.env.KAFKA_CLIENT_ID || 'task-management-backend';
-const GROUP_ID = process.env.KAFKA_CONSUMER_GROUP_ID || 'task-management-group';
-const BROKERS = (process.env.KAFKA_BROKERS || 'localhost:9092')
-    .split(',')
-    .map((broker) => broker.trim())
-    .filter(Boolean);
-// Aiven's free tier caps topics at 2 partitions; creating more is rejected.
-const TOPIC_PARTITIONS = Number(process.env.KAFKA_TOPIC_PARTITIONS || 2);
-const TOPIC_REPLICATION_FACTOR = Number(process.env.KAFKA_TOPIC_REPLICATION_FACTOR || 1);
-const PRODUCER_CONNECT_TIMEOUT_MS = Number(process.env.KAFKA_PRODUCER_CONNECT_TIMEOUT_MS || 5000);
+import { config } from '../config';
+import { getErrorMessage } from '../utils';
 
 export const TOPICS = {
     AUTH_EVENTS: 'auth-events',
@@ -21,40 +10,30 @@ export const TOPICS = {
     HEALTH_CHECK: 'health-check',
 } as const;
 
-// A relative AIVEN_KAFKA_CA_PATH is resolved from <project root>/config, so the default ../ca.pem is the project root.
-// Anchored on the working directory rather than __dirname, which differs between src/ and the compiled output;
-// npm scripts run from the project root, and dotenv already depends on that to find .env.
-const CA_PATH_BASE_DIR = path.resolve('config');
-
 // SASL_SSL (Aiven) when credentials are configured, plaintext for the local docker-compose broker.
 const buildSecurityConfig = (): Pick<KafkaConfig, 'ssl' | 'sasl'> => {
-    const username = process.env.KAFKA_USERNAME;
-    if (!username) {
+    const { sasl } = config.kafka;
+    if (!sasl) {
         return {};
     }
-
-    const configuredPath = process.env.AIVEN_KAFKA_CA_PATH || '../ca.pem';
-    const caPath = path.isAbsolute(configuredPath)
-        ? configuredPath
-        : path.resolve(CA_PATH_BASE_DIR, configuredPath);
 
     return {
         ssl: {
             rejectUnauthorized: true,
-            ca: [fs.readFileSync(caPath, 'utf8')],
+            ca: [fs.readFileSync(sasl.caPath, 'utf8')],
         },
         // The mechanism is not validated here: kafkajs rejects an unsupported one when it connects.
         sasl: {
-            mechanism: process.env.KAFKA_SASL_MECHANISM || 'scram-sha-256',
-            username,
-            password: process.env.KAFKA_PASSWORD ?? '',
+            mechanism: sasl.mechanism,
+            username: sasl.username,
+            password: sasl.password,
         } as SASLOptions,
     };
 };
 
 export const kafka = new Kafka({
-    clientId: CLIENT_ID,
-    brokers: BROKERS,
+    clientId: config.kafka.clientId,
+    brokers: config.kafka.brokers,
     logLevel: logLevel.INFO,
     ...buildSecurityConfig(),
 });
@@ -73,8 +52,8 @@ const createTopics = async (topics: string[]): Promise<void> => {
             .filter((topic) => !existingTopics.includes(topic))
             .map((topic) => ({
                 topic,
-                numPartitions: TOPIC_PARTITIONS,
-                replicationFactor: TOPIC_REPLICATION_FACTOR,
+                numPartitions: config.kafka.topicPartitions,
+                replicationFactor: config.kafka.topicReplicationFactor,
             }));
 
         if (topicsToCreate.length > 0) {
@@ -131,11 +110,12 @@ const waitForProducer = (): Promise<Producer> => {
         return Promise.reject(new Error(`Kafka unavailable: ${getErrorMessage(lastConnectError)}`));
     }
 
+    const timeoutMs = config.kafka.producerConnectTimeoutMs;
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
-            () => reject(new Error(`Kafka producer not connected within ${PRODUCER_CONNECT_TIMEOUT_MS}ms`)),
-            PRODUCER_CONNECT_TIMEOUT_MS
+            () => reject(new Error(`Kafka producer not connected within ${timeoutMs}ms`)),
+            timeoutMs
         );
     });
 
@@ -183,4 +163,4 @@ export const publish = async ({ topic, event, message, key = null, headers = {} 
     });
 };
 
-export const createConsumer = () => kafka.consumer({ groupId: GROUP_ID });
+export const createConsumer = () => kafka.consumer({ groupId: config.kafka.groupId });

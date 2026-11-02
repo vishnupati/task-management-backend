@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import Task from '../src/models/task/task';
 import { TASK_EVENTS } from '../src/models/task/events';
-import * as cache from '../src/config/cache';
+import * as cache from '../src/lib/cache';
 import { handleMessage } from '../src/workers/event-consumer';
 
 const userId = new mongoose.Types.ObjectId().toString();
 const taskId = new mongoose.Types.ObjectId().toString();
 
-// The worker looks invalidate up on the cache module per call, so replacing the export is enough.
+// The worker reaches invalidate through the lib barrel, which reads it from the cache module on every call, so
+// stubbing it on the module works. (The barrel's own exports are getters and can't be stubbed.)
 const stubInvalidate = () => mock.method(cache, 'invalidate', async (_keys: cache.CacheKey) => {});
 let invalidate: ReturnType<typeof stubInvalidate>;
 

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import Redis, { type Result } from 'ioredis';
-import { getErrorMessage } from '../utils/errors';
+import { config } from '../config';
+import { getErrorMessage } from '../utils';
 
 declare module 'ioredis' {
     interface RedisCommander<Context> {
@@ -10,10 +11,6 @@ declare module 'ioredis' {
 
 // Read-through cache on Redis. Strictly an optimization: every failure path falls back to the loader,
 // and the app runs without it when REDIS_URL is unset.
-const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 300);
-// Keeps one heavy user from evicting everyone else on a small instance (Render's free Key Value is 25 MB).
-const CACHE_MAX_ENTRY_BYTES = Number(process.env.CACHE_MAX_ENTRY_BYTES || 128 * 1024);
-const REDIS_COMMAND_TIMEOUT_MS = Number(process.env.REDIS_COMMAND_TIMEOUT_MS || 100);
 const VERSION_TTL_SECONDS = 24 * 60 * 60;
 const ERROR_LOG_INTERVAL_MS = 30000;
 
@@ -39,17 +36,17 @@ const logCacheError = (operation: string, error: unknown): void => {
 };
 
 const createClient = (): Redis | null => {
-    if (!process.env.REDIS_URL) {
+    if (!config.redis.url) {
         return null;
     }
 
-    const redis = new Redis(process.env.REDIS_URL, {
+    const redis = new Redis(config.redis.url, {
         lazyConnect: true,
         // Never queue commands while disconnected or wait on a slow Redis: a cache that is slower than the
         // database is worse than no cache, so fail fast and let callers read from MongoDB.
         enableOfflineQueue: false,
         maxRetriesPerRequest: 1,
-        commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+        commandTimeout: config.redis.commandTimeoutMs,
         connectTimeout: 5000,
         retryStrategy: (attempt) => Math.min(attempt * 200, 5000),
     });
@@ -92,7 +89,7 @@ export interface ReadThroughResult {
 
 // Returns the JSON body as a string so hits are sent without a parse/stringify round trip.
 // status: HIT | MISS | BYPASS (cache disabled or unavailable). A null result is never cached.
-export const readThrough = async <T>({ key, versionKey, load, ttlSeconds = CACHE_TTL_SECONDS }: ReadThroughOptions<T>): Promise<ReadThroughResult> => {
+export const readThrough = async <T>({ key, versionKey, load, ttlSeconds = config.redis.cacheTtlSeconds }: ReadThroughOptions<T>): Promise<ReadThroughResult> => {
     if (!isReady(client)) {
         return { body: serialize(await load()), status: 'BYPASS' };
     }
@@ -111,7 +108,7 @@ export const readThrough = async <T>({ key, versionKey, load, ttlSeconds = CACHE
 
     const body = serialize(await load());
 
-    if (body !== null && Buffer.byteLength(body) <= CACHE_MAX_ENTRY_BYTES) {
+    if (body !== null && Buffer.byteLength(body) <= config.redis.cacheMaxEntryBytes) {
         client
             .setIfVersion(versionKey, key, version, body, ttlSeconds)
             .catch((error: unknown) => logCacheError('write', error));

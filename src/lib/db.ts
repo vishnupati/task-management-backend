@@ -1,10 +1,10 @@
 import mongoose from 'mongoose';
-import { getErrorMessage } from '../utils/errors';
+import { config } from '../config';
+import { getErrorMessage } from '../utils';
 
 const connectDB = async (): Promise<void> => {
     try {
-        // An unset MONGO_URI fails here as an invalid connection string.
-        await mongoose.connect(process.env.MONGO_URI ?? '');
+        await mongoose.connect(config.mongo.uri);
         console.log('MongoDB connected');
     } catch (error) {
         console.error('MongoDB connection error:', getErrorMessage(error));

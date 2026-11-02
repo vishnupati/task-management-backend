@@ -14,7 +14,7 @@ const taskSchema = new mongoose.Schema<ITask>({
         ref: 'User',
         required: true,
     },
-    // Idempotency key for creates. The task _id is derived from it (see controllers/task.ts), so a
+    // Idempotency key for creates. The task _id is derived from it (see services/task.ts), so a
     // client retry or a Kafka redelivery of the same create collides on _id instead of duplicating.
     clientTaskId: {
         type: String,

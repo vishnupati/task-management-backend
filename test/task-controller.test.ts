@@ -2,11 +2,12 @@ import { test, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import * as kafka from '../src/config/kafka';
+import * as kafka from '../src/lib/kafka';
 import { createTask, updateTask } from '../src/controllers/task';
 import { TASK_EVENTS, type TaskEventMessage } from '../src/models/task/events';
 
-// The controller looks publish up on the kafka module per call, so replacing the export is enough.
+// Services reach publish through the lib barrel, which reads it from the kafka module on every call, so stubbing it
+// on the module works. (The barrel's own exports are getters and can't be stubbed.)
 const publish = mock.method(kafka, 'publish', async (_options: kafka.PublishOptions) => {});
 
 const userId = new mongoose.Types.ObjectId().toString();

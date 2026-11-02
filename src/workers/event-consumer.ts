@@ -1,13 +1,11 @@
 import mongoose from 'mongoose';
 import type { Consumer, EachMessagePayload } from 'kafkajs';
-import Task from '../models/task/task';
-import { TOPICS, createConsumer, ensureTopics } from '../config/kafka';
-import { TASK_EVENTS, pickMutableTaskFields, type TaskEventMessage } from '../models/task/events';
-import { cacheKeys, invalidate } from '../config/cache';
-import { getErrorMessage, isDuplicateKeyError } from '../utils/errors';
+import { config } from '../config';
+import { TOPICS, cacheKeys, createConsumer, ensureTopics, invalidate } from '../lib';
+import { Task, TASK_EVENTS, pickMutableTaskFields, type TaskEventMessage } from '../models';
+import { getErrorMessage, isDuplicateKeyError } from '../utils';
 
 const RESTART_DELAY_MS = 10000;
-const PARTITIONS_CONSUMED_CONCURRENTLY = Number(process.env.KAFKA_CONSUMER_CONCURRENCY || 3);
 
 let consumer: Consumer | null = null;
 let restartTimer: NodeJS.Timeout | undefined;
@@ -71,7 +69,7 @@ export const handleMessage = async ({ topic, partition, message }: Pick<EachMess
     const eventId = message.headers && message.headers.eventId && message.headers.eventId.toString();
     const location = { topic, partition, offset: message.offset, eventType, eventId };
 
-    // Shape is not validated: task-events is only written by controllers/task.ts.
+    // Shape is not validated: task-events is only written by services/task.ts.
     let event: TaskEventMessage;
     try {
         // A null value (tombstone) fails to parse like any other bad payload.
@@ -134,7 +132,7 @@ export const runConsumer = async (): Promise<void> => {
         await instance.connect();
         await instance.subscribe({ topics: [TOPICS.AUTH_EVENTS, TOPICS.TASK_EVENTS], fromBeginning: true });
         await instance.run({
-            partitionsConsumedConcurrently: PARTITIONS_CONSUMED_CONCURRENTLY,
+            partitionsConsumedConcurrently: config.kafka.consumerConcurrency,
             eachMessage: handleMessage,
         });
         console.log('Kafka consumer running');

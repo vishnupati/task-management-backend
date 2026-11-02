@@ -1,4 +1,4 @@
-// Shared contract between the task API (producer) and workers/event-consumer.ts (consumer).
+// Shared contract between services/task.ts (producer) and workers/event-consumer.ts (consumer).
 export const TASK_EVENTS = {
     CREATE: 'task_create_request',
     UPDATE: 'task_update_request',

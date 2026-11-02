@@ -1,15 +1,12 @@
-// First import: modules below read process.env when they load.
+// First import: src/config reads process.env as soon as one of the modules below loads it.
 import 'dotenv/config';
 import mongoose from 'mongoose';
 import app from './app';
-import connectDB from './config/db';
-import { ensureTopics, getProducer, disconnectProducer } from './config/kafka';
-import { runConsumer, stopConsumer } from './workers/event-consumer';
-import { connectCache, disconnectCache } from './config/cache';
-import { getErrorMessage } from './utils/errors';
-import './jobs/kafkaKeepAlive';
-
-const port = process.env.PORT || 3000;
+import { config } from './config';
+import { connectDB, ensureTopics, getProducer, disconnectProducer, connectCache, disconnectCache } from './lib';
+import { runConsumer, stopConsumer } from './workers';
+import { getErrorMessage } from './utils';
+import './jobs';
 
 const SHUTDOWN_TIMEOUT_MS = 10000;
 
@@ -19,8 +16,8 @@ const start = async () => {
     // Not awaited: the cache is optional and requests bypass it until Redis is ready.
     connectCache();
 
-    const server = app.listen(port, () => {
-        console.log(`Server is running on port ${port}`);
+    const server = app.listen(config.port, () => {
+        console.log(`Server is running on port ${config.port}`);
     });
 
     // Warm up Kafka in the background so the first write doesn't pay for the TLS/SASL handshake.
