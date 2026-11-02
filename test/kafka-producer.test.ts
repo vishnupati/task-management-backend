@@ -2,9 +2,9 @@ import { test, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 // Each test needs fresh module state (memoized producer, last connect error), and some set env read at load time.
-const loadFreshKafkaConfig = (): typeof import('../config/kafka') => {
-    delete require.cache[require.resolve('../config/kafka')];
-    return require('../config/kafka');
+const loadFreshKafkaConfig = (): typeof import('../src/config/kafka') => {
+    delete require.cache[require.resolve('../src/config/kafka')];
+    return require('../src/config/kafka');
 };
 
 const deferred = () => {

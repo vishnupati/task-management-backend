@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { authenticate } from '../middlewares/auth';
+import { authenticate } from '../src/middlewares/auth';
 
 // Read per request, so setting it after the import is enough.
 process.env.JWT_SECRET = 'test-secret';

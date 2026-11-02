@@ -1,10 +1,10 @@
 import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
-import Task from '../models/task/task';
-import { TASK_EVENTS } from '../models/task/events';
-import * as cache from '../config/cache';
-import { handleMessage } from '../workers/event-consumer';
+import Task from '../src/models/task/task';
+import { TASK_EVENTS } from '../src/models/task/events';
+import * as cache from '../src/config/cache';
+import { handleMessage } from '../src/workers/event-consumer';
 
 const userId = new mongoose.Types.ObjectId().toString();
 const taskId = new mongoose.Types.ObjectId().toString();

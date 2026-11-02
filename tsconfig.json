@@ -7,8 +7,10 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "types": ["node"],
+    // This config compiles src/ and test/ together, for `npm test`. Production builds use tsconfig.build.json
+    // (src/ only, into dist/), so test output goes to its own folder.
     "rootDir": ".",
-    "outDir": "dist",
+    "outDir": "dist-test",
     "sourceMap": true,
 
     "strict": true,
@@ -20,6 +22,5 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src", "test"]
 }

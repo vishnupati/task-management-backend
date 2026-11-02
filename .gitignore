@@ -131,3 +131,6 @@ dist
 
 # Aiven Kafka SSL certificate
 ca.pem
+
+# TypeScript test build (npm test)
+dist-test

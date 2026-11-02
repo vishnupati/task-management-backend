@@ -1,14 +1,14 @@
 {
   "name": "task-management-backend",
   "version": "1.0.0",
-  "main": "dist/index.js",
+  "main": "dist/server.js",
   "scripts": {
-    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "clean": "node -e \"for (const dir of ['dist', 'dist-test']) require('fs').rmSync(dir, { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "start": "node --enable-source-maps dist/index.js",
-    "dev": "tsx watch index.ts",
-    "test": "npm run clean && tsc && node --enable-source-maps --test \"dist/test/**/*.test.js\""
+    "start": "node --enable-source-maps dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "test": "npm run clean && tsc && node --enable-source-maps --test \"dist-test/test/**/*.test.js\""
   },
   "author": "",
   "license": "ISC",

@@ -1,11 +1,7 @@
 // First import: modules below read process.env when they load.
 import 'dotenv/config';
-import express from 'express';
 import mongoose from 'mongoose';
-import cors from 'cors';
-import cookieParser from 'cookie-parser';
-import taskRoutes from './routes/task';
-import authRoutes from './routes/auth';
+import app from './app';
 import connectDB from './config/db';
 import { ensureTopics, getProducer, disconnectProducer } from './config/kafka';
 import { runConsumer, stopConsumer } from './workers/event-consumer';
@@ -13,31 +9,9 @@ import { connectCache, disconnectCache } from './config/cache';
 import { getErrorMessage } from './utils/errors';
 import './jobs/kafkaKeepAlive';
 
-const app = express();
 const port = process.env.PORT || 3000;
 
 const SHUTDOWN_TIMEOUT_MS = 10000;
-
-// Credentialed CORS must be an allowlist: reflecting every origin lets any website read
-// authenticated responses using the visitor's cookies.
-const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:4200')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-app.disable('x-powered-by');
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-app.use(cors({
-    origin: allowedOrigins,
-    credentials: true,
-}));
-app.use('/api/auth', authRoutes);
-app.use('/api/tasks', taskRoutes);
-app.get('/', (req, res) => {
-    res.send('Hello World');
-});
 
 const start = async () => {
     // Without MongoDB every request would hang in mongoose's command buffer, so don't accept traffic until connected.

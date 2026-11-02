@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // Redis disabled: the cache must be invisible apart from the BYPASS status. REDIS_URL is read when the module
 // loads, hence require() after clearing it rather than an import.
 delete process.env.REDIS_URL;
-const { cacheKeys, readThrough, invalidate }: typeof import('../config/cache') = require('../config/cache');
+const { cacheKeys, readThrough, invalidate }: typeof import('../src/config/cache') = require('../src/config/cache');
 
 test('without Redis, reads go straight to the loader', async () => {
     let loads = 0;

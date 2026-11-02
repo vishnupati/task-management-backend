@@ -21,10 +21,10 @@ export const TOPICS = {
     HEALTH_CHECK: 'health-check',
 } as const;
 
-// A relative AIVEN_KAFKA_CA_PATH is resolved from the project's config/ directory (default ../ca.pem = project root).
-// Anchored on the working directory rather than __dirname, which is dist/config/ once compiled; npm scripts run
-// from the project root, and dotenv already depends on that to find .env.
-const CONFIG_DIR = path.resolve('config');
+// A relative AIVEN_KAFKA_CA_PATH is resolved from <project root>/config, so the default ../ca.pem is the project root.
+// Anchored on the working directory rather than __dirname, which differs between src/ and the compiled output;
+// npm scripts run from the project root, and dotenv already depends on that to find .env.
+const CA_PATH_BASE_DIR = path.resolve('config');
 
 // SASL_SSL (Aiven) when credentials are configured, plaintext for the local docker-compose broker.
 const buildSecurityConfig = (): Pick<KafkaConfig, 'ssl' | 'sasl'> => {
@@ -36,7 +36,7 @@ const buildSecurityConfig = (): Pick<KafkaConfig, 'ssl' | 'sasl'> => {
     const configuredPath = process.env.AIVEN_KAFKA_CA_PATH || '../ca.pem';
     const caPath = path.isAbsolute(configuredPath)
         ? configuredPath
-        : path.resolve(CONFIG_DIR, configuredPath);
+        : path.resolve(CA_PATH_BASE_DIR, configuredPath);
 
     return {
         ssl: {

@@ -23,7 +23,7 @@ CORS_ORIGINS=http://localhost:4200
 KAFKA_BROKERS=localhost:9092
 KAFKA_USERNAME=
 KAFKA_PASSWORD=
-# Absolute, or relative to the config/ directory (../ca.pem = project root). Commands must run from the project root.
+# Absolute, or relative to <project root>/config (so ../ca.pem = project root). Commands must run from the project root.
 AIVEN_KAFKA_CA_PATH=../ca.pem
 # Optional: KAFKA_SASL_MECHANISM (scram-sha-256), KAFKA_CONSUMER_GROUP_ID, KAFKA_TOPIC_PARTITIONS (2, Aiven free max),
 # KAFKA_TOPIC_REPLICATION_FACTOR (1), KAFKA_CONSUMER_CONCURRENCY (3), KAFKA_PRODUCER_CONNECT_TIMEOUT_MS (5000)
@@ -37,7 +37,8 @@ Local Kafka + MongoDB + Redis: `docker compose up -d`.
 
 ## Running
 
-Written in TypeScript and compiled to CommonJS in `dist/`.
+Written in TypeScript: source in `src/` (entry point `src/server.ts`), tests in `test/`. Compiled to CommonJS
+in `dist/`.
 
 - `npm run dev`: run from source with reload on change (tsx; no type checking)
 - `npm run build`: type-check and compile to `dist/`
@@ -140,7 +141,7 @@ All task endpoints now require `Authorization: Bearer <token>` and are scoped pe
 	- `202 { message, eventId }`
 
 Writes are queued on Kafka (`task-events`, keyed by user so a user's writes apply in order) and applied by
-`workers/event-consumer.ts`, so they are eventually consistent: `GET /api/tasks/:id` returns 404 until the
+`src/workers/event-consumer.ts`, so they are eventually consistent: `GET /api/tasks/:id` returns 404 until the
 create has been applied (normally milliseconds). The returned `id` can be used immediately for PATCH/DELETE.
 Send a `clientTaskId` to make create retries safe: the same `clientTaskId` always maps to the same task `id`.
 

@@ -2,9 +2,9 @@ import { test, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import * as kafka from '../config/kafka';
-import { createTask, updateTask } from '../controllers/task';
-import { TASK_EVENTS, type TaskEventMessage } from '../models/task/events';
+import * as kafka from '../src/config/kafka';
+import { createTask, updateTask } from '../src/controllers/task';
+import { TASK_EVENTS, type TaskEventMessage } from '../src/models/task/events';
 
 // The controller looks publish up on the kafka module per call, so replacing the export is enough.
 const publish = mock.method(kafka, 'publish', async (_options: kafka.PublishOptions) => {});
