@@ -1,12 +1,14 @@
 import fs from 'fs';
 import { Kafka, Partitioners, logLevel, type KafkaConfig, type Producer, type SASLOptions } from 'kafkajs';
 import { config } from '../config';
-import type { PublishOptions } from '../types';
+import type { PublishOptions, RecordToPublish } from '../types';
 import { getErrorMessage } from '../utils';
 
 export const TOPICS = {
     AUTH_EVENTS: 'auth-events',
     TASK_EVENTS: 'task-events',
+    // Task events the worker could not apply, copied unchanged for inspection and replay. Nothing consumes it.
+    TASK_EVENTS_DLQ: 'task-events-dlq',
     // Written by jobs/kafkaKeepAlive.ts. Must be provisioned here because auto topic creation is off on Aiven.
     HEALTH_CHECK: 'health-check',
 } as const;
@@ -49,12 +51,20 @@ const createTopics = async (topics: string[]): Promise<void> => {
 
     try {
         const existingTopics = await admin.listTopics();
+        const { topicPartitions, topicReplicationFactor } = config.kafka;
+        // With acks=all a write must reach min.insync.replicas replicas. RF - 1 keeps writes available with one
+        // broker down (RF 3 -> 2, the usual production setting); a higher value would reject writes as soon as one
+        // fails. Without replication there is nothing to set.
+        const configEntries = topicReplicationFactor > 1
+            ? [{ name: 'min.insync.replicas', value: String(topicReplicationFactor - 1) }]
+            : [];
         const topicsToCreate = topics
             .filter((topic) => !existingTopics.includes(topic))
             .map((topic) => ({
                 topic,
-                numPartitions: config.kafka.topicPartitions,
-                replicationFactor: config.kafka.topicReplicationFactor,
+                numPartitions: topicPartitions,
+                replicationFactor: topicReplicationFactor,
+                configEntries,
             }));
 
         if (topicsToCreate.length > 0) {
@@ -139,21 +149,26 @@ export const disconnectProducer = async (): Promise<void> => {
     }
 };
 
-export const publish = async ({ topic, event, message, key = null, headers = {} }: PublishOptions): Promise<void> => {
+// acks=-1 (all in-sync replicas) is kafkajs' default too; it is spelled out because an acknowledged event must
+// survive a broker failure. Transient send failures are retried by kafkajs (5 times by default).
+export const publishRecord = async ({ topic, key, value, headers }: RecordToPublish): Promise<void> => {
     const producer = await waitForProducer();
     await producer.send({
         topic,
-        messages: [
-            {
-                key,
-                value: JSON.stringify(message),
-                headers: {
-                    ...headers,
-                    eventType: event,
-                },
-            },
-        ],
+        acks: -1,
+        messages: [{ key, value, headers }],
     });
 };
+
+export const publish = ({ topic, event, message, key = null, headers = {} }: PublishOptions): Promise<void> =>
+    publishRecord({
+        topic,
+        key,
+        value: JSON.stringify(message),
+        headers: {
+            ...headers,
+            eventType: event,
+        },
+    });
 
 export const createConsumer = () => kafka.consumer({ groupId: config.kafka.groupId });

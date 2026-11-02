@@ -7,6 +7,11 @@ export const TASK_EVENTS = {
 
 export type TaskEventType = (typeof TASK_EVENTS)[keyof typeof TASK_EVENTS];
 
+const TASK_EVENT_TYPES: readonly string[] = Object.values(TASK_EVENTS);
+
+export const isTaskEventType = (value: unknown): value is TaskEventType =>
+    typeof value === 'string' && TASK_EVENT_TYPES.includes(value);
+
 // Only these fields are client-writable; userId, _id and clientTaskId are always set by the server.
 export const MUTABLE_TASK_FIELDS = ['title', 'description', 'status'] as const;
 
@@ -24,7 +29,20 @@ export interface TaskEventMessage {
     data?: MutableTaskFields;
 }
 
-export const pickMutableTaskFields = (source: Readonly<Record<string, unknown>> = {}): MutableTaskFields =>
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// Messages arrive from outside the process (an older or newer producer, a manual replay), so the consumer checks
+// the shape at runtime before using it.
+export const isTaskEventMessage = (value: unknown): value is TaskEventMessage =>
+    isRecord(value) &&
+    typeof value.taskId === 'string' && value.taskId !== '' &&
+    typeof value.userId === 'string' && value.userId !== '' &&
+    typeof value.requestedAt === 'string' &&
+    (value.clientTaskId === undefined || typeof value.clientTaskId === 'string') &&
+    (value.data === undefined || isRecord(value.data));
+
+export const pickMutableTaskFields =(source: Readonly<Record<string, unknown>> = {}): MutableTaskFields =>
     MUTABLE_TASK_FIELDS.reduce<MutableTaskFields>((fields, field) => {
         if (source[field] !== undefined) {
             fields[field] = source[field];

@@ -1,8 +1,17 @@
 import mongoose from 'mongoose';
-import type { Consumer, EachMessagePayload } from 'kafkajs';
+import type { Consumer, KafkaMessage } from 'kafkajs';
 import { config } from '../config';
-import { TOPICS, cacheKeys, createConsumer, ensureTopics, invalidate } from '../lib';
-import { Task, TASK_EVENTS, pickMutableTaskFields, type TaskEventMessage } from '../models';
+import { TOPICS, cacheKeys, createConsumer, ensureTopics, invalidate, publishRecord } from '../lib';
+import {
+    Task,
+    TASK_EVENTS,
+    isTaskEventMessage,
+    isTaskEventType,
+    pickMutableTaskFields,
+    type TaskEventMessage,
+    type TaskEventType,
+} from '../models';
+import type { ConsumedMessage } from '../types';
 import { getErrorMessage, isDuplicateKeyError } from '../utils';
 
 const RESTART_DELAY_MS = 10000;
@@ -11,8 +20,10 @@ let consumer: Consumer | null = null;
 let restartTimer: NodeJS.Timeout | undefined;
 let stopped = false;
 
+const header = (message: KafkaMessage, name: string) => message.headers?.[name]?.toString();
+
 // Kafka delivers at least once, so every branch must be safe to replay.
-const handleTaskEvent = async (eventType: string | undefined, event: TaskEventMessage) => {
+const handleTaskEvent = async (eventType: TaskEventType, event: TaskEventMessage) => {
     const filter = { _id: event.taskId, userId: event.userId };
 
     switch (eventType) {
@@ -55,8 +66,11 @@ const handleTaskEvent = async (eventType: string | undefined, event: TaskEventMe
             return;
         }
 
-        default:
-            console.warn('Unknown task event type, skipping:', eventType);
+        default: {
+            // Fails to compile when a new event type has no case here.
+            const unhandled: never = eventType;
+            throw new Error(`Unhandled task event type: ${String(unhandled)}`);
+        }
     }
 };
 
@@ -64,23 +78,58 @@ const handleTaskEvent = async (eventType: string | undefined, event: TaskEventMe
 const isPermanentError = (error: unknown) =>
     error instanceof mongoose.Error.ValidationError || error instanceof mongoose.Error.CastError;
 
-export const handleMessage = async ({ topic, partition, message }: Pick<EachMessagePayload, 'topic' | 'partition' | 'message'>) => {
-    const eventType = message.headers && message.headers.eventType && message.headers.eventType.toString();
-    const eventId = message.headers && message.headers.eventId && message.headers.eventId.toString();
-    const location = { topic, partition, offset: message.offset, eventType, eventId };
+// A record that can never be applied is copied unchanged to the dead-letter topic, with why and where from in its
+// headers, then skipped so it doesn't block its partition. If that write fails too, the record is only logged: it
+// stays in the source topic until retention removes it, and the logged offset finds it there.
+const deadLetter = async ({ topic, partition, message }: ConsumedMessage, reason: string): Promise<void> => {
+    const location = { topic, partition, offset: message.offset, eventType: header(message, 'eventType'), eventId: header(message, 'eventId') };
 
-    // Shape is not validated: task-events is only written by services/task.ts.
-    let event: TaskEventMessage;
     try {
-        // A null value (tombstone) fails to parse like any other bad payload.
-        event = JSON.parse(message.value?.toString() ?? '');
+        await publishRecord({
+            topic: TOPICS.TASK_EVENTS_DLQ,
+            key: message.key,
+            value: message.value,
+            headers: {
+                ...message.headers,
+                dlqReason: reason,
+                dlqSource: `${topic}/${partition}/${message.offset}`,
+                dlqFailedAt: new Date().toISOString(),
+            },
+        });
+        console.warn('Task event moved to the dead-letter topic', { ...location, reason });
     } catch (error) {
-        console.error('Skipping unparseable message', location);
+        console.error('Skipping task event, dead-lettering failed', { ...location, reason, error: getErrorMessage(error) });
+    }
+};
+
+export const handleMessage = async (payload: ConsumedMessage): Promise<void> => {
+    const { topic, message } = payload;
+    const eventType = header(message, 'eventType');
+
+    if (topic === TOPICS.AUTH_EVENTS) {
+        // Analytics only: nothing is applied, so there is nothing to retry or dead-letter.
+        console.log('Auth event processed:', eventType);
         return;
     }
 
-    if (topic === TOPICS.AUTH_EVENTS) {
-        console.log('Auth event processed:', eventType);
+    let event: unknown;
+    try {
+        // A null value (tombstone) fails to parse like any other bad payload.
+        event = JSON.parse(message.value?.toString() ?? '');
+    } catch {
+        await deadLetter(payload, 'Unparseable payload');
+        return;
+    }
+
+    // Checked up front: a malformed event would otherwise fail with a TypeError, which looks transient, so it would
+    // be retried forever and block every later event on its partition.
+    if (!isTaskEventMessage(event)) {
+        await deadLetter(payload, 'Not a valid task event');
+        return;
+    }
+
+    if (!isTaskEventType(eventType)) {
+        await deadLetter(payload, `Unknown task event type: ${eventType}`);
         return;
     }
 
@@ -89,9 +138,7 @@ export const handleMessage = async ({ topic, partition, message }: Pick<EachMess
 
         // Invalidate here, not in the API: MongoDB only changes now. Also runs for replays/no-ops, which is
         // what repairs the cache if a previous attempt committed to MongoDB but died before invalidating.
-        if (event.userId) {
-            await invalidate(cacheKeys.taskList(event.userId));
-        }
+        await invalidate(cacheKeys.taskList(event.userId));
     } catch (error) {
         if (!isPermanentError(error)) {
             // Transient (e.g. MongoDB unavailable): rethrow so kafkajs retries from this offset instead of
@@ -99,8 +146,8 @@ export const handleMessage = async ({ topic, partition, message }: Pick<EachMess
             throw error;
         }
 
-        // Poison message. Logged with its offset for manual replay; a dead-letter topic is the next step if this shows up.
-        console.error('Skipping invalid task event', { ...location, error: getErrorMessage(error) });
+        // Rejected by the schema (e.g. a missing title): retrying can't fix it.
+        await deadLetter(payload, getErrorMessage(error));
     }
 };
 
