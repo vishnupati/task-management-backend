@@ -1,8 +1,7 @@
-const express = require('express');
-const axios = require('axios');
-const router = express.Router();
-const { signup, login, forceLogin, sso, ssoByProvider, refreshToken, revokeToken, me } = require('../controllers/auth');
-const {
+import express from 'express';
+import axios from 'axios';
+import { signup, login, forceLogin, sso, ssoByProvider, refreshToken, revokeToken, me, type SsoResponseBody } from '../controllers/auth';
+import {
     validateSignup,
     validateLogin,
     validateForceLogin,
@@ -10,9 +9,12 @@ const {
     validateSsoProviderRoute,
     validateRefreshToken,
     validateRevokeToken,
-} = require('../models/auth/validator');
-const { authenticate } = require('../middlewares/auth');
-const { validateRequest } = require('../middlewares/validate-request');
+} from '../models/auth/validator';
+import { authenticate } from '../middlewares/auth';
+import { validateRequest } from '../middlewares/validate-request';
+import { getErrorMessage } from '../utils/errors';
+
+const router = express.Router();
 
 router.post('/signup', validateSignup, validateRequest, signup);
 router.post('/login', validateLogin, validateRequest, login);
@@ -32,7 +34,7 @@ router.get('/github/callback', async (req, res) => {
         const code = req.query.code;
 
         // 1. Exchange code for GitHub access_token
-        const tokenRes = await axios.post(
+        const tokenRes = await axios.post<{ access_token?: string }>(
             'https://github.com/login/oauth/access_token',
             {
                 client_id: process.env.GITHUB_CLIENT_ID,
@@ -56,17 +58,18 @@ router.get('/github/callback', async (req, res) => {
         // It will create JWT access + refresh tokens
         let ssoStatus = 200;
         const jsonResponse = await sso(req, {
-            status: (statusCode) => {
+            status: (statusCode: number) => {
                 ssoStatus = statusCode;
-                return { json: (data) => data };
+                return { json: (data: SsoResponseBody) => data };
             },
             cookie: res.cookie.bind(res),
         });
 
         // sso() reports failures (bad code, device quota reached) via status, not by throwing.
-        if (ssoStatus !== 200) {
+        if (ssoStatus !== 200 || 'message' in jsonResponse) {
+            const message = 'message' in jsonResponse ? jsonResponse.message : '';
             return res.redirect(
-                `${process.env.FRONTEND_URL || 'http://localhost:4200'}/oauth-error?message=${encodeURIComponent(jsonResponse.message || 'OAuth authentication failed')}`
+                `${process.env.FRONTEND_URL || 'http://localhost:4200'}/oauth-error?message=${encodeURIComponent(message || 'OAuth authentication failed')}`
             );
         }
 
@@ -82,9 +85,9 @@ router.get('/github/callback', async (req, res) => {
     } catch (err) {
         console.error(err);
         return res.redirect(
-            `${process.env.FRONTEND_URL || 'http://localhost:4200'}/oauth-error?message=${encodeURIComponent(err.message)}`
+            `${process.env.FRONTEND_URL || 'http://localhost:4200'}/oauth-error?message=${encodeURIComponent(getErrorMessage(err))}`
         );
     }
 });
 
-module.exports = router;
+export default router;

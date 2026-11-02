@@ -23,12 +23,42 @@ CORS_ORIGINS=http://localhost:4200
 KAFKA_BROKERS=localhost:9092
 KAFKA_USERNAME=
 KAFKA_PASSWORD=
+# Absolute, or relative to the config/ directory (../ca.pem = project root). Commands must run from the project root.
 AIVEN_KAFKA_CA_PATH=../ca.pem
-# Optional: KAFKA_SASL_MECHANISM (scram-sha-256), KAFKA_CONSUMER_GROUP_ID, KAFKA_TOPIC_PARTITIONS (3),
-# KAFKA_TOPIC_REPLICATION_FACTOR (1), KAFKA_CONSUMER_CONCURRENCY (3)
+# Optional: KAFKA_SASL_MECHANISM (scram-sha-256), KAFKA_CONSUMER_GROUP_ID, KAFKA_TOPIC_PARTITIONS (2, Aiven free max),
+# KAFKA_TOPIC_REPLICATION_FACTOR (1), KAFKA_CONSUMER_CONCURRENCY (3), KAFKA_PRODUCER_CONNECT_TIMEOUT_MS (5000)
+
+# Optional Redis response cache (redis:// or rediss://). Unset = cache disabled, everything reads MongoDB.
+REDIS_URL=redis://localhost:6379
+# Optional: CACHE_TTL_SECONDS (300), CACHE_MAX_ENTRY_BYTES (131072), REDIS_COMMAND_TIMEOUT_MS (100)
 ```
 
-Local Kafka + MongoDB: `docker compose up -d`. Tests: `npm test`.
+Local Kafka + MongoDB + Redis: `docker compose up -d`.
+
+## Running
+
+Written in TypeScript and compiled to CommonJS in `dist/`.
+
+- `npm run dev`: run from source with reload on change (tsx; no type checking)
+- `npm run build`: type-check and compile to `dist/`
+- `npm start`: run the compiled build (`npm run build` first; deployments need it as the build step)
+- `npm run typecheck`: type-check everything, tests included
+- `npm test`: compile, then run the tests against the compiled output
+  (add `REDIS_TEST_URL=redis://localhost:6379` to also run the Redis integration tests)
+
+## Caching
+
+`GET /api/tasks` and `GET /api/auth/me` are served from Redis when `REDIS_URL` is set. The response header
+`X-Cache` is `HIT`, `MISS` or `BYPASS` (cache disabled or Redis unavailable).
+
+- Entries are invalidated by the Kafka consumer right after it applies a write, so a list read after a write
+  is visible in MongoDB never returns the pre-write list.
+- Redis is never on the critical path: commands time out after `REDIS_COMMAND_TIMEOUT_MS`, nothing is queued
+  while disconnected, and every failure falls back to MongoDB.
+- If Redis is unreachable while a write is applied (but keeps its data), that entry can be stale for up to
+  `CACHE_TTL_SECONDS`.
+- Use the `allkeys-lru` eviction policy (Render Key Value's default). Entries over `CACHE_MAX_ENTRY_BYTES`
+  are not cached.
 
 ## Auth Endpoints
 
@@ -110,7 +140,7 @@ All task endpoints now require `Authorization: Bearer <token>` and are scoped pe
 	- `202 { message, eventId }`
 
 Writes are queued on Kafka (`task-events`, keyed by user so a user's writes apply in order) and applied by
-`workers/event-consumer.js`, so they are eventually consistent: `GET /api/tasks/:id` returns 404 until the
+`workers/event-consumer.ts`, so they are eventually consistent: `GET /api/tasks/:id` returns 404 until the
 create has been applied (normally milliseconds). The returned `id` can be used immediately for PATCH/DELETE.
 Send a `clientTaskId` to make create retries safe: the same `clientTaskId` always maps to the same task `id`.
 

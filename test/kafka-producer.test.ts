@@ -1,14 +1,15 @@
-const { test, mock, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
+import { test, mock, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 
-const loadFreshKafkaConfig = () => {
+// Each test needs fresh module state (memoized producer, last connect error), and some set env read at load time.
+const loadFreshKafkaConfig = (): typeof import('../config/kafka') => {
     delete require.cache[require.resolve('../config/kafka')];
     return require('../config/kafka');
 };
 
 const deferred = () => {
-    let resolve;
-    const promise = new Promise((res) => { resolve = res; });
+    let resolve = () => {};
+    const promise = new Promise<void>((res) => { resolve = () => res(); });
     return { promise, resolve };
 };
 
@@ -19,12 +20,18 @@ afterEach(() => mock.restoreAll());
 test('while the broker is unreachable, publish fails immediately and recovers once a reconnect succeeds', async () => {
     const kafkaConfig = loadFreshKafkaConfig();
     const send = mock.fn(async () => {});
-    const connectBehaviours = [
+    const connectBehaviours: Array<() => Promise<void>> = [
         () => Promise.reject(new Error('getaddrinfo ENOTFOUND broker')),
     ];
     const reconnect = deferred();
     connectBehaviours.push(() => reconnect.promise);
-    const connect = mock.fn(() => connectBehaviours.shift()());
+    const connect = mock.fn(() => {
+        const behaviour = connectBehaviours.shift();
+        if (!behaviour) {
+            throw new Error('unexpected connect');
+        }
+        return behaviour();
+    });
     mock.method(kafkaConfig.kafka, 'producer', () => ({ connect, send, disconnect: async () => {} }));
 
     await assert.rejects(kafkaConfig.publish(message), /ENOTFOUND/);

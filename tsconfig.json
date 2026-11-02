@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    // No "type": "module" in package.json, so this emits CommonJS. Tests rely on that: they stub functions by
+    // replacing properties on module exports, which ESM namespaces don't allow.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": "dist",
+    "sourceMap": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

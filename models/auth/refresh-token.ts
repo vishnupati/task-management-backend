@@ -1,6 +1,15 @@
-const mongoose = require('mongoose');
+import mongoose, { type Types } from 'mongoose';
 
-const refreshTokenSchema = new mongoose.Schema(
+export interface IRefreshToken {
+    userId: Types.ObjectId;
+    jti: string;
+    tokenHash: string;
+    revokedAt: Date | null;
+    replacedByJti: string | null;
+    expiresAt: Date;
+}
+
+const refreshTokenSchema = new mongoose.Schema<IRefreshToken>(
     {
         userId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -37,4 +46,4 @@ const refreshTokenSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-module.exports = mongoose.model('RefreshToken', refreshTokenSchema);
+export default mongoose.model<IRefreshToken>('RefreshToken', refreshTokenSchema);

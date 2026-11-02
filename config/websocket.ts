@@ -1,8 +1,9 @@
-const { Server } = require('socket.io');
+import type { Server as HttpServer } from 'http';
+import { Server } from 'socket.io';
 
-let io;
+let io: Server | undefined;
 
-const initWebSocket = (server) => {
+export const initWebSocket = (server: HttpServer): Server => {
     io = new Server(server, {
         cors: {
             origin: "*", // Adjust in production
@@ -14,7 +15,7 @@ const initWebSocket = (server) => {
         console.log('User connected to WebSocket:', socket.id);
 
         // Join a room based on userId for targeted events
-        socket.on('join', (userId) => {
+        socket.on('join', (userId: string) => {
             if (userId) {
                 socket.join(`user:${userId}`);
                 console.log(`User ${userId} joined room user:${userId}`);
@@ -29,20 +30,14 @@ const initWebSocket = (server) => {
     return io;
 };
 
-const getIO = () => {
+export const getIO = (): Server => {
     if (!io) {
         throw new Error('WebSocket not initialized');
     }
     return io;
 };
 
-const emitToUser = (userId, event, data) => {
+export const emitToUser = (userId: string, event: string, data: unknown): void => {
     const ioInstance = getIO();
     ioInstance.to(`user:${userId}`).emit(event, data);
-};
-
-module.exports = {
-    initWebSocket,
-    getIO,
-    emitToUser
 };

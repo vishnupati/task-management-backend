@@ -24,6 +24,13 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
 
+  redis:
+    # Mirrors Render's free Key Value instance: 25 MB, LRU eviction, no persistence.
+    image: redis:7.4-alpine
+    command: ["redis-server", "--maxmemory", "25mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
   mongodb:
     image: mongo:latest
     ports:

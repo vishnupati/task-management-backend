@@ -1,18 +1,25 @@
-const { test, mock, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
-const mongoose = require('mongoose');
-const Task = require('../models/task/task');
-const { TASK_EVENTS } = require('../models/task/events');
-const { handleMessage } = require('../workers/event-consumer');
+import { test, mock, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
+import Task from '../models/task/task';
+import { TASK_EVENTS } from '../models/task/events';
+import * as cache from '../config/cache';
+import { handleMessage } from '../workers/event-consumer';
 
 const userId = new mongoose.Types.ObjectId().toString();
 const taskId = new mongoose.Types.ObjectId().toString();
 
-const kafkaMessage = (eventType, event) => ({
+// The worker looks invalidate up on the cache module per call, so replacing the export is enough.
+const stubInvalidate = () => mock.method(cache, 'invalidate', async (_keys: cache.CacheKey) => {});
+let invalidate: ReturnType<typeof stubInvalidate>;
+
+const kafkaMessage = (eventType: string, event: object) => ({
     topic: 'task-events',
     partition: 0,
     message: {
         offset: '42',
+        timestamp: '0',
+        attributes: 0,
         key: Buffer.from(userId),
         value: Buffer.from(JSON.stringify(event)),
         headers: { eventType: Buffer.from(eventType), eventId: Buffer.from('evt-1') },
@@ -21,10 +28,33 @@ const kafkaMessage = (eventType, event) => ({
 
 const duplicateKeyError = () => Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { _id: 1 } });
 
-afterEach(() => mock.restoreAll());
+beforeEach(() => {
+    invalidate = stubInvalidate();
+});
+
+afterEach(() => {
+    mock.restoreAll();
+});
+
+test('an applied write invalidates that user\'s cached task list, replays included', async () => {
+    mock.method(Task, 'create', async () => { throw duplicateKeyError(); });
+
+    await handleMessage(kafkaMessage(TASK_EVENTS.CREATE, { taskId, userId, data: { title: 't' } }));
+
+    assert.equal(invalidate.mock.callCount(), 1);
+    assert.deepEqual(invalidate.mock.calls[0]?.arguments[0], cache.cacheKeys.taskList(userId));
+});
+
+test('a write that failed to apply leaves the cache alone', async () => {
+    mock.method(Task, 'updateOne', async () => { throw new Error('connection reset'); });
+
+    await assert.rejects(handleMessage(kafkaMessage(TASK_EVENTS.UPDATE, { taskId, userId, data: { title: 'x' } })));
+
+    assert.equal(invalidate.mock.callCount(), 0);
+});
 
 test('create persists only whitelisted fields with server-assigned _id and userId', async () => {
-    const create = mock.method(Task, 'create', async () => {});
+    const create = mock.method(Task, 'create', async (_doc: unknown) => {});
 
     await handleMessage(kafkaMessage(TASK_EVENTS.CREATE, {
         taskId,
@@ -34,7 +64,7 @@ test('create persists only whitelisted fields with server-assigned _id and userI
     }));
 
     assert.equal(create.mock.callCount(), 1);
-    assert.deepEqual(create.mock.calls[0].arguments[0], {
+    assert.deepEqual(create.mock.calls[0]?.arguments[0], {
         title: 'Write tests',
         description: 'd',
         status: 'pending',
@@ -67,7 +97,7 @@ test('invalid event is skipped instead of blocking the partition forever', async
 });
 
 test('update is scoped to the owning user and only sets whitelisted fields', async () => {
-    const updateOne = mock.method(Task, 'updateOne', async () => ({ matchedCount: 1 }));
+    const updateOne = mock.method(Task, 'updateOne', async (_filter: unknown, _update: unknown, _options: unknown) => ({ matchedCount: 1 }));
 
     await handleMessage(kafkaMessage(TASK_EVENTS.UPDATE, {
         taskId,
@@ -75,18 +105,18 @@ test('update is scoped to the owning user and only sets whitelisted fields', asy
         data: { title: 'Renamed', userId: 'attacker', $unset: { title: 1 } },
     }));
 
-    const [filter, update, options] = updateOne.mock.calls[0].arguments;
+    const [filter, update, options] = updateOne.mock.calls[0]?.arguments ?? [];
     assert.deepEqual(filter, { _id: taskId, userId });
     assert.deepEqual(update, { $set: { title: 'Renamed' } });
     assert.deepEqual(options, { runValidators: true });
 });
 
 test('delete is scoped to the owning user', async () => {
-    const deleteOne = mock.method(Task, 'deleteOne', async () => ({ deletedCount: 1 }));
+    const deleteOne = mock.method(Task, 'deleteOne', async (_filter: unknown) => ({ deletedCount: 1 }));
 
     await handleMessage(kafkaMessage(TASK_EVENTS.DELETE, { taskId, userId }));
 
-    assert.deepEqual(deleteOne.mock.calls[0].arguments[0], { _id: taskId, userId });
+    assert.deepEqual(deleteOne.mock.calls[0]?.arguments[0], { _id: taskId, userId });
 });
 
 test('unparseable payload is skipped', async () => {

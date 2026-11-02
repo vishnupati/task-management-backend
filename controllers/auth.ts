@@ -1,10 +1,15 @@
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const axios = require('axios');
-const { OAuth2Client } = require('google-auth-library');
-const User = require('../models/user/user');
-const RefreshToken = require('../models/auth/refresh-token');
-const { publish, TOPICS } = require('../config/kafka');
+import crypto from 'crypto';
+import type { Request, Response } from 'express';
+import jwt, { type SignOptions } from 'jsonwebtoken';
+import axios from 'axios';
+import { OAuth2Client } from 'google-auth-library';
+import type { HydratedDocument, Types } from 'mongoose';
+import User, { type IUser } from '../models/user/user';
+import RefreshToken, { type IRefreshToken } from '../models/auth/refresh-token';
+import { publish, TOPICS } from '../config/kafka';
+import { cacheKeys, readThrough, invalidate } from '../config/cache';
+import { getAuthUser } from '../middlewares/auth';
+import { getErrorMessage, isDuplicateKeyError } from '../utils/errors';
 
 const maxDeviceLogins = Number(process.env.MAX_DEVICE_LOGINS || 3);
 const sessionTtlSeconds = Number(process.env.SESSION_TTL_SECONDS || 60 * 30);
@@ -15,7 +20,6 @@ const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 const maxDeviceMessage = 'reached maxiamum login quata , if you want to login this device logout other devices';
 
 const isProduction = process.env.NODE_ENV === 'production';
-const DUPLICATE_KEY_ERROR = 11000;
 
 const authCookieOptions = {
     httpOnly: true,
@@ -23,27 +27,71 @@ const authCookieOptions = {
     // Browsers drop SameSite=None cookies that aren't Secure, which silently broke cookie auth outside production.
     sameSite: isProduction ? 'none' : 'lax',
     path: '/',
-};
+} as const;
+
+// What tokens and auth responses are built from; satisfied by both user documents and lean query results.
+type TokenUser = Pick<IUser, 'name' | 'email' | 'authProvider'> & { _id: Types.ObjectId };
+
+interface TokenPair {
+    accessToken: string;
+    refreshToken: string;
+    refreshJti: string;
+}
+
+export interface AuthResponse {
+    access_token: string;
+    refresh_token: string;
+    token_type: 'Bearer';
+    expires_in: number;
+    token: string;
+    user: {
+        id: Types.ObjectId;
+        name: string;
+        email: string;
+        authProvider: string;
+    };
+}
+
+export type SsoResponseBody = AuthResponse | { message: string };
+
+// The part of Response that sso() uses. routes/auth.ts passes a stand-in to capture the result of a GitHub login.
+interface SsoResponder<T> {
+    status(code: number): { json(body: SsoResponseBody): T };
+    cookie: Response['cookie'];
+}
+
+interface SsoPayload {
+    provider: string;
+    idToken?: string;
+    accessToken?: string;
+}
+
+interface OAuthIdentity {
+    email: string;
+    name: string;
+    providerId: string;
+}
 
 // Auth events are analytics-only, so publish in the background: login/refresh latency no longer includes
 // a Kafka round trip. Trade-off: an event can be lost if Kafka is down or the process dies mid-send.
-const publishAuthEvent = (event, message) => {
+const publishAuthEvent = (event: string, message: { userId: Types.ObjectId | string; [field: string]: unknown }) => {
     publish({
         topic: TOPICS.AUTH_EVENTS,
         event,
         key: String(message.userId),
         message: { ...message, timestamp: new Date() },
-    }).catch((error) => console.error(`Kafka publish error (${event}):`, error.message));
+    }).catch((error: unknown) => console.error(`Kafka publish error (${event}):`, getErrorMessage(error)));
 };
 
-const signAccessToken = (user) =>
+const signAccessToken = (user: TokenUser) =>
     jwt.sign(
         { sub: user._id.toString(), email: user.email },
         process.env.JWT_SECRET || 'change-me-in-env',
-        { expiresIn: process.env.JWT_EXPIRES_IN || `${accessTokenTtlSeconds}s` }
+        // jsonwebtoken parses the duration (ms format) and throws on sign if JWT_EXPIRES_IN is malformed.
+        { expiresIn: (process.env.JWT_EXPIRES_IN || `${accessTokenTtlSeconds}s`) as SignOptions['expiresIn'] }
     );
 
-const signRefreshToken = (user) =>
+const signRefreshToken = (user: TokenUser) =>
     jwt.sign(
         {
             sub: user._id.toString(),
@@ -54,9 +102,9 @@ const signRefreshToken = (user) =>
         { expiresIn: `${refreshTokenTtlSeconds}s` }
     );
 
-const hashToken = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const hashToken = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
 
-const setAuthCookies = (res, tokens) => {
+const setAuthCookies = (res: Pick<Response, 'cookie'>, tokens: TokenPair) => {
     res.cookie('access_token', tokens.accessToken, {
         ...authCookieOptions,
         maxAge: accessTokenTtlSeconds * 1000,
@@ -68,12 +116,12 @@ const setAuthCookies = (res, tokens) => {
     });
 };
 
-const clearAuthCookies = (res) => {
+const clearAuthCookies = (res: Response) => {
     res.clearCookie('access_token', authCookieOptions);
     res.clearCookie('refresh_token', authCookieOptions);
 };
 
-const getRefreshTokenFromRequest = (req) => {
+const getRefreshTokenFromRequest = (req: Request): string | null => {
     if (req.body && req.body.refresh_token) {
         return req.body.refresh_token;
     }
@@ -85,7 +133,7 @@ const getRefreshTokenFromRequest = (req) => {
     return null;
 };
 
-const toAuthResponse = (user, tokens) => ({
+const toAuthResponse = (user: TokenUser, tokens: TokenPair): AuthResponse => ({
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken,
     token_type: 'Bearer',
@@ -99,11 +147,11 @@ const toAuthResponse = (user, tokens) => ({
     },
 });
 
-const issueTokenPair = async (user) => {
+const issueTokenPair = async (user: TokenUser): Promise<TokenPair> => {
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
 
-    const decoded = jwt.decode(refreshToken);
+    const decoded = jwt.decode(refreshToken, { json: true });
     const jti = decoded && decoded.jti;
 
     if (!jti) {
@@ -120,7 +168,7 @@ const issueTokenPair = async (user) => {
     return { accessToken, refreshToken, refreshJti: jti };
 };
 
-const rotateRefreshTokenPair = async (user, currentTokenDoc) => {
+const rotateRefreshTokenPair = async (user: TokenUser, currentTokenDoc: HydratedDocument<IRefreshToken>) => {
     const tokens = await issueTokenPair(user);
 
     currentTokenDoc.revokedAt = new Date();
@@ -130,14 +178,14 @@ const rotateRefreshTokenPair = async (user, currentTokenDoc) => {
     return tokens;
 };
 
-const revokeAllUserRefreshTokens = async (userId) => {
+const revokeAllUserRefreshTokens = async (userId: Types.ObjectId | string) => {
     await RefreshToken.updateMany(
         { userId, revokedAt: null },
         { $set: { revokedAt: new Date() } }
     );
 };
 
-const hasReachedDeviceQuota = async (userId) => {
+const hasReachedDeviceQuota = async (userId: Types.ObjectId) => {
     const activeSessions = await RefreshToken.countDocuments({
         userId,
         revokedAt: null,
@@ -147,7 +195,7 @@ const hasReachedDeviceQuota = async (userId) => {
     return activeSessions >= maxDeviceLogins;
 };
 
-const verifyGoogleIdentity = async (idToken) => {
+const verifyGoogleIdentity = async (idToken: string): Promise<OAuthIdentity> => {
     if (!googleClient) {
         throw new Error('GOOGLE_CLIENT_ID is not configured');
     }
@@ -170,19 +218,32 @@ const verifyGoogleIdentity = async (idToken) => {
     };
 };
 
-const verifyGithubIdentity = async (accessToken) => {
+interface GithubUser {
+    id: number;
+    login: string;
+    name: string | null;
+    email: string | null;
+}
+
+interface GithubEmail {
+    email: string;
+    primary: boolean;
+    verified: boolean;
+}
+
+const verifyGithubIdentity = async (accessToken: string): Promise<OAuthIdentity> => {
     const headers = {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/vnd.github+json',
         'User-Agent': 'task-management-backend',
     };
 
-    const userResponse = await axios.get('https://api.github.com/user', { headers });
+    const userResponse = await axios.get<GithubUser>('https://api.github.com/user', { headers });
     const githubUser = userResponse.data;
 
     let email = githubUser.email;
     if (!email) {
-        const emailsResponse = await axios.get('https://api.github.com/user/emails', { headers });
+        const emailsResponse = await axios.get<GithubEmail[] | null>('https://api.github.com/user/emails', { headers });
         const primaryVerified = (emailsResponse.data || []).find((item) => item.primary && item.verified);
         email = primaryVerified ? primaryVerified.email : null;
     }
@@ -198,8 +259,14 @@ const verifyGithubIdentity = async (accessToken) => {
     };
 };
 
-const verifyFacebookIdentity = async (accessToken) => {
-    const response = await axios.get('https://graph.facebook.com/me', {
+interface FacebookUser {
+    id?: string;
+    name?: string;
+    email?: string;
+}
+
+const verifyFacebookIdentity = async (accessToken: string): Promise<OAuthIdentity> => {
+    const response = await axios.get<FacebookUser | null>('https://graph.facebook.com/me', {
         params: {
             fields: 'id,name,email',
             access_token: accessToken,
@@ -221,8 +288,17 @@ const verifyFacebookIdentity = async (accessToken) => {
     };
 };
 
-const verifyTwitterIdentity = async (accessToken) => {
-    const response = await axios.get('https://api.twitter.com/2/users/me', {
+interface TwitterUserResponse {
+    data?: {
+        id?: string;
+        name?: string;
+        username?: string;
+        email?: string;
+    };
+}
+
+const verifyTwitterIdentity = async (accessToken: string): Promise<OAuthIdentity> => {
+    const response = await axios.get<TwitterUserResponse | null>('https://api.twitter.com/2/users/me', {
         headers: {
             Authorization: `Bearer ${accessToken}`,
         },
@@ -247,9 +323,22 @@ const verifyTwitterIdentity = async (accessToken) => {
     };
 };
 
-const verifyOAuthIdentity = async ({ provider, idToken, accessToken }) => {
+const verifyOAuthIdentity = async ({ provider, idToken, accessToken }: SsoPayload): Promise<OAuthIdentity> => {
+    // The route validators already require the right token per provider; the GitHub callback route doesn't run them.
     if (provider === 'google') {
+        if (!idToken) {
+            throw new Error('idToken is required for Google OAuth2');
+        }
+
         return verifyGoogleIdentity(idToken);
+    }
+
+    if (provider !== 'github' && provider !== 'facebook' && provider !== 'twitter') {
+        throw new Error('Unsupported provider');
+    }
+
+    if (!accessToken) {
+        throw new Error('accessToken is required for this OAuth provider');
     }
 
     if (provider === 'github') {
@@ -260,20 +349,16 @@ const verifyOAuthIdentity = async ({ provider, idToken, accessToken }) => {
         return verifyFacebookIdentity(accessToken);
     }
 
-    if (provider === 'twitter') {
-        return verifyTwitterIdentity(accessToken);
-    }
-
-    throw new Error('Unsupported provider');
+    return verifyTwitterIdentity(accessToken);
 };
 
-const buildSsoPayloadFromRequest = (req) => ({
+const buildSsoPayloadFromRequest = (req: Request): SsoPayload => ({
     provider: String((req.body && req.body.provider) || (req.params && req.params.provider) || '').toLowerCase(),
     idToken: (req.body && req.body.idToken) || (req.query && req.query.idToken),
     accessToken: (req.body && req.body.accessToken) || (req.query && req.query.accessToken),
 });
 
-const signup = async (req, res) => {
+export const signup = async (req: Request, res: Response) => {
     try {
         const { name, email, password } = req.body;
         const normalizedEmail = email.toLowerCase();
@@ -288,7 +373,7 @@ const signup = async (req, res) => {
                 authProvider: 'local',
             });
         } catch (error) {
-            if (error.code === DUPLICATE_KEY_ERROR) {
+            if (isDuplicateKeyError(error)) {
                 return res.status(409).json({ message: 'User already exists' });
             }
             throw error;
@@ -306,7 +391,7 @@ const signup = async (req, res) => {
     }
 };
 
-const login = async (req, res) => {
+export const login = async (req: Request, res: Response) => {
     try {
         const { email, password } = req.body;
         const normalizedEmail = email.toLowerCase();
@@ -316,12 +401,16 @@ const login = async (req, res) => {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
 
-        const isMatch = await user.comparePassword(password);
+        // Independent: overlap the session count query with the bcrypt work instead of running them back to back.
+        // The password result is still checked first, so a wrong password never reveals the quota state.
+        const [isMatch, reachedQuota] = await Promise.all([
+            user.comparePassword(password),
+            hasReachedDeviceQuota(user._id),
+        ]);
         if (!isMatch) {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
 
-        const reachedQuota = await hasReachedDeviceQuota(user._id);
         if (reachedQuota) {
             return res.status(409).json({ message: maxDeviceMessage });
         }
@@ -338,7 +427,7 @@ const login = async (req, res) => {
     }
 };
 
-const forceLogin = async (req, res) => {
+export const forceLogin = async (req: Request, res: Response) => {
     try {
         const { email, password } = req.body;
         const normalizedEmail = email.toLowerCase();
@@ -368,7 +457,7 @@ const forceLogin = async (req, res) => {
     }
 };
 
-const sso = async (req, res) => {
+export const sso = async <T>(req: Request, res: SsoResponder<T>): Promise<T> => {
     try {
         const { provider, idToken, accessToken } = buildSsoPayloadFromRequest(req);
         const identity = await verifyOAuthIdentity({ provider, idToken, accessToken });
@@ -393,6 +482,7 @@ const sso = async (req, res) => {
             user.authProvider = provider;
             user.providerId = identity.providerId;
             await user.save();
+            await invalidate(cacheKeys.userProfile(user._id.toString()));
         }
 
         const reachedQuota = await hasReachedDeviceQuota(user._id);
@@ -407,13 +497,13 @@ const sso = async (req, res) => {
 
         return res.status(200).json(toAuthResponse(user, tokens));
     } catch (error) {
-        return res.status(401).json({ message: error.message || 'OAuth authentication failed' });
+        return res.status(401).json({ message: (error instanceof Error && error.message) || 'OAuth authentication failed' });
     }
 };
 
-const ssoByProvider = async (req, res) => sso(req, res);
+export const ssoByProvider = async (req: Request, res: Response) => sso(req, res);
 
-const refreshToken = async (req, res) => {
+export const refreshToken = async (req: Request, res: Response) => {
     try {
         const refreshTokenValue = getRefreshTokenFromRequest(req);
 
@@ -426,7 +516,7 @@ const refreshToken = async (req, res) => {
             process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'change-me-in-env'
         );
 
-        if (!decoded || decoded.type !== 'refresh') {
+        if (typeof decoded === 'string' || decoded.type !== 'refresh' || !decoded.sub || !decoded.jti) {
             return res.status(401).json({ message: 'Invalid refresh token' });
         }
 
@@ -465,7 +555,7 @@ const refreshToken = async (req, res) => {
     }
 };
 
-const revokeToken = async (req, res) => {
+export const revokeToken = async (req: Request, res: Response) => {
     try {
         const refreshTokenValue = getRefreshTokenFromRequest(req);
 
@@ -479,7 +569,7 @@ const revokeToken = async (req, res) => {
             process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'change-me-in-env'
         );
 
-        if (!decoded || decoded.type !== 'refresh') {
+        if (typeof decoded === 'string' || decoded.type !== 'refresh' || !decoded.sub || !decoded.jti) {
             clearAuthCookies(res);
             return res.status(200).json({ revoked: false });
         }
@@ -506,26 +596,34 @@ const revokeToken = async (req, res) => {
     }
 };
 
-const me = async (req, res) => {
+export const me = async (req: Request, res: Response) => {
     try {
-        const user = await User.findById(req.user.id).select('name email authProvider').lean();
+        const userId = getAuthUser(req).id;
 
-        if (!user) {
+        // Cached; the only profile mutation (SSO re-link in sso()) invalidates it.
+        const { body, status } = await readThrough({
+            ...cacheKeys.userProfile(userId),
+            load: async () => {
+                const user = await User.findById(userId).select('name email authProvider').lean();
+
+                return user && {
+                    user: {
+                        id: user._id,
+                        name: user.name,
+                        email: user.email,
+                        authProvider: user.authProvider,
+                    },
+                };
+            },
+        });
+
+        if (body === null) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        return res.status(200).json({
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                authProvider: user.authProvider,
-            },
-        });
+        return res.status(200).set('X-Cache', status).type('json').send(body);
     } catch (error) {
         console.error('Failed to load current user:', error);
         return res.status(500).json({ message: 'Internal server error' });
     }
 };
-
-module.exports = { signup, login, forceLogin, sso, ssoByProvider, refreshToken, revokeToken, me };

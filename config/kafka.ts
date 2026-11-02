@@ -1,6 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const { Kafka, Partitioners, logLevel } = require('kafkajs');
+import fs from 'fs';
+import path from 'path';
+import { Kafka, Partitioners, logLevel, type IHeaders, type KafkaConfig, type Producer, type SASLOptions } from 'kafkajs';
+import { getErrorMessage } from '../utils/errors';
 
 const CLIENT_ID = process.env.KAFKA_CLIENT_ID || 'task-management-backend';
 const GROUP_ID = process.env.KAFKA_CONSUMER_GROUP_ID || 'task-management-group';
@@ -13,49 +14,56 @@ const TOPIC_PARTITIONS = Number(process.env.KAFKA_TOPIC_PARTITIONS || 2);
 const TOPIC_REPLICATION_FACTOR = Number(process.env.KAFKA_TOPIC_REPLICATION_FACTOR || 1);
 const PRODUCER_CONNECT_TIMEOUT_MS = Number(process.env.KAFKA_PRODUCER_CONNECT_TIMEOUT_MS || 5000);
 
-const TOPICS = {
+export const TOPICS = {
     AUTH_EVENTS: 'auth-events',
     TASK_EVENTS: 'task-events',
-    // Written by jobs/kafkaKeepAlive.js. Must be provisioned here because auto topic creation is off on Aiven.
+    // Written by jobs/kafkaKeepAlive.ts. Must be provisioned here because auto topic creation is off on Aiven.
     HEALTH_CHECK: 'health-check',
-};
+} as const;
+
+// A relative AIVEN_KAFKA_CA_PATH is resolved from the project's config/ directory (default ../ca.pem = project root).
+// Anchored on the working directory rather than __dirname, which is dist/config/ once compiled; npm scripts run
+// from the project root, and dotenv already depends on that to find .env.
+const CONFIG_DIR = path.resolve('config');
 
 // SASL_SSL (Aiven) when credentials are configured, plaintext for the local docker-compose broker.
-const buildSecurityConfig = () => {
-    if (!process.env.KAFKA_USERNAME) {
+const buildSecurityConfig = (): Pick<KafkaConfig, 'ssl' | 'sasl'> => {
+    const username = process.env.KAFKA_USERNAME;
+    if (!username) {
         return {};
     }
 
     const configuredPath = process.env.AIVEN_KAFKA_CA_PATH || '../ca.pem';
     const caPath = path.isAbsolute(configuredPath)
         ? configuredPath
-        : path.resolve(__dirname, configuredPath);
+        : path.resolve(CONFIG_DIR, configuredPath);
 
     return {
         ssl: {
             rejectUnauthorized: true,
             ca: [fs.readFileSync(caPath, 'utf8')],
         },
+        // The mechanism is not validated here: kafkajs rejects an unsupported one when it connects.
         sasl: {
             mechanism: process.env.KAFKA_SASL_MECHANISM || 'scram-sha-256',
-            username: process.env.KAFKA_USERNAME,
-            password: process.env.KAFKA_PASSWORD,
-        },
+            username,
+            password: process.env.KAFKA_PASSWORD ?? '',
+        } as SASLOptions,
     };
 };
 
-const kafka = new Kafka({
+export const kafka = new Kafka({
     clientId: CLIENT_ID,
     brokers: BROKERS,
     logLevel: logLevel.INFO,
     ...buildSecurityConfig(),
 });
 
-let topicsReady = null;
-let producerReady = null;
-let lastConnectError = null;
+let topicsReady: Promise<void> | null = null;
+let producerReady: Promise<Producer> | null = null;
+let lastConnectError: unknown = null;
 
-const createTopics = async (topics) => {
+const createTopics = async (topics: string[]): Promise<void> => {
     const admin = kafka.admin();
     await admin.connect();
 
@@ -79,11 +87,11 @@ const createTopics = async (topics) => {
 };
 
 // Best effort and run once per process: topics usually already exist, and a missing one surfaces as a clear send error.
-const ensureTopics = () => {
+export const ensureTopics = (): Promise<void> => {
     if (!topicsReady) {
-        topicsReady = createTopics(Object.values(TOPICS)).catch((error) => {
+        topicsReady = createTopics(Object.values(TOPICS)).catch((error: unknown) => {
             topicsReady = null;
-            console.error('Kafka topic provisioning failed:', error.message);
+            console.error('Kafka topic provisioning failed:', getErrorMessage(error));
         });
     }
 
@@ -92,7 +100,7 @@ const ensureTopics = () => {
 
 // Memoize the connect promise (not the producer) so concurrent first requests share one connection,
 // and reset it on failure so a broker outage at startup doesn't poison every later publish.
-const getProducer = () => {
+export const getProducer = (): Promise<Producer> => {
     if (!producerReady) {
         producerReady = (async () => {
             const producer = kafka.producer({
@@ -103,7 +111,7 @@ const getProducer = () => {
             await producer.connect();
             lastConnectError = null;
             return producer;
-        })().catch((error) => {
+        })().catch((error: unknown) => {
             producerReady = null;
             lastConnectError = error;
             throw error;
@@ -115,16 +123,16 @@ const getProducer = () => {
 
 // A connect to an unreachable broker spends tens of seconds in kafkajs backoff; requests must not wait that out.
 // After a failed connect, fail immediately while one reconnect runs in the background; otherwise wait a bounded time.
-const waitForProducer = () => {
+const waitForProducer = (): Promise<Producer> => {
     const pending = getProducer();
 
     if (lastConnectError) {
         pending.catch(() => {});
-        return Promise.reject(new Error(`Kafka unavailable: ${lastConnectError.message}`));
+        return Promise.reject(new Error(`Kafka unavailable: ${getErrorMessage(lastConnectError)}`));
     }
 
-    let timer;
-    const timeout = new Promise((_, reject) => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
             () => reject(new Error(`Kafka producer not connected within ${PRODUCER_CONNECT_TIMEOUT_MS}ms`)),
             PRODUCER_CONNECT_TIMEOUT_MS
@@ -134,7 +142,7 @@ const waitForProducer = () => {
     return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
 };
 
-const disconnectProducer = async () => {
+export const disconnectProducer = async (): Promise<void> => {
     if (!producerReady) {
         return;
     }
@@ -145,12 +153,20 @@ const disconnectProducer = async () => {
     try {
         const producer = await pending;
         await producer.disconnect();
-    } catch (error) {
+    } catch {
         // Never connected, nothing to release.
     }
 };
 
-const publish = async ({ topic, event, message, key = null, headers = {} }) => {
+export interface PublishOptions {
+    topic: string;
+    event: string;
+    message: unknown;
+    key?: string | null;
+    headers?: IHeaders;
+}
+
+export const publish = async ({ topic, event, message, key = null, headers = {} }: PublishOptions): Promise<void> => {
     const producer = await waitForProducer();
     await producer.send({
         topic,
@@ -167,14 +183,4 @@ const publish = async ({ topic, event, message, key = null, headers = {} }) => {
     });
 };
 
-const createConsumer = () => kafka.consumer({ groupId: GROUP_ID });
-
-module.exports = {
-    kafka,
-    TOPICS,
-    ensureTopics,
-    getProducer,
-    disconnectProducer,
-    publish,
-    createConsumer,
-};
+export const createConsumer = () => kafka.consumer({ groupId: GROUP_ID });

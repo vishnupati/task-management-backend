@@ -1,18 +1,20 @@
-const mongoose = require('mongoose');
-const Task = require('../models/task/task');
-const { TOPICS, createConsumer, ensureTopics } = require('../config/kafka');
-const { TASK_EVENTS, pickMutableTaskFields } = require('../models/task/events');
+import mongoose from 'mongoose';
+import type { Consumer, EachMessagePayload } from 'kafkajs';
+import Task from '../models/task/task';
+import { TOPICS, createConsumer, ensureTopics } from '../config/kafka';
+import { TASK_EVENTS, pickMutableTaskFields, type TaskEventMessage } from '../models/task/events';
+import { cacheKeys, invalidate } from '../config/cache';
+import { getErrorMessage, isDuplicateKeyError } from '../utils/errors';
 
-const DUPLICATE_KEY_ERROR = 11000;
 const RESTART_DELAY_MS = 10000;
 const PARTITIONS_CONSUMED_CONCURRENTLY = Number(process.env.KAFKA_CONSUMER_CONCURRENCY || 3);
 
-let consumer = null;
-let restartTimer = null;
+let consumer: Consumer | null = null;
+let restartTimer: NodeJS.Timeout | undefined;
 let stopped = false;
 
 // Kafka delivers at least once, so every branch must be safe to replay.
-const handleTaskEvent = async (eventType, event) => {
+const handleTaskEvent = async (eventType: string | undefined, event: TaskEventMessage) => {
     const filter = { _id: event.taskId, userId: event.userId };
 
     switch (eventType) {
@@ -25,7 +27,7 @@ const handleTaskEvent = async (eventType, event) => {
                     clientTaskId: event.clientTaskId,
                 });
             } catch (error) {
-                if (error.code !== DUPLICATE_KEY_ERROR) {
+                if (!isDuplicateKeyError(error)) {
                     throw error;
                 }
 
@@ -61,17 +63,19 @@ const handleTaskEvent = async (eventType, event) => {
 };
 
 // Retrying these can never succeed, so they must not block the partition.
-const isPermanentError = (error) =>
+const isPermanentError = (error: unknown) =>
     error instanceof mongoose.Error.ValidationError || error instanceof mongoose.Error.CastError;
 
-const handleMessage = async ({ topic, partition, message }) => {
+export const handleMessage = async ({ topic, partition, message }: Pick<EachMessagePayload, 'topic' | 'partition' | 'message'>) => {
     const eventType = message.headers && message.headers.eventType && message.headers.eventType.toString();
     const eventId = message.headers && message.headers.eventId && message.headers.eventId.toString();
     const location = { topic, partition, offset: message.offset, eventType, eventId };
 
-    let event;
+    // Shape is not validated: task-events is only written by controllers/task.ts.
+    let event: TaskEventMessage;
     try {
-        event = JSON.parse(message.value.toString());
+        // A null value (tombstone) fails to parse like any other bad payload.
+        event = JSON.parse(message.value?.toString() ?? '');
     } catch (error) {
         console.error('Skipping unparseable message', location);
         return;
@@ -84,6 +88,12 @@ const handleMessage = async ({ topic, partition, message }) => {
 
     try {
         await handleTaskEvent(eventType, event);
+
+        // Invalidate here, not in the API: MongoDB only changes now. Also runs for replays/no-ops, which is
+        // what repairs the cache if a previous attempt committed to MongoDB but died before invalidating.
+        if (event.userId) {
+            await invalidate(cacheKeys.taskList(event.userId));
+        }
     } catch (error) {
         if (!isPermanentError(error)) {
             // Transient (e.g. MongoDB unavailable): rethrow so kafkajs retries from this offset instead of
@@ -92,7 +102,7 @@ const handleMessage = async ({ topic, partition, message }) => {
         }
 
         // Poison message. Logged with its offset for manual replay; a dead-letter topic is the next step if this shows up.
-        console.error('Skipping invalid task event', { ...location, error: error.message });
+        console.error('Skipping invalid task event', { ...location, error: getErrorMessage(error) });
     }
 };
 
@@ -102,12 +112,12 @@ const scheduleRestart = () => {
     }
 
     restartTimer = setTimeout(() => {
-        restartTimer = null;
+        restartTimer = undefined;
         runConsumer();
     }, RESTART_DELAY_MS);
 };
 
-const runConsumer = async () => {
+export const runConsumer = async (): Promise<void> => {
     const instance = createConsumer();
     consumer = instance;
 
@@ -129,16 +139,16 @@ const runConsumer = async () => {
         });
         console.log('Kafka consumer running');
     } catch (error) {
-        console.error('Failed to start Kafka consumer, retrying:', error.message);
+        console.error('Failed to start Kafka consumer, retrying:', getErrorMessage(error));
         await instance.disconnect().catch(() => {});
         scheduleRestart();
     }
 };
 
-const stopConsumer = async () => {
+export const stopConsumer = async (): Promise<void> => {
     stopped = true;
     clearTimeout(restartTimer);
-    restartTimer = null;
+    restartTimer = undefined;
 
     if (consumer) {
         const instance = consumer;
@@ -146,5 +156,3 @@ const stopConsumer = async () => {
         await instance.disconnect();
     }
 };
-
-module.exports = { runConsumer, stopConsumer, handleMessage };

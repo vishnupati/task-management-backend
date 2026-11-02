@@ -1,12 +1,20 @@
-const mongoose = require('mongoose');
+import mongoose, { type Types } from 'mongoose';
 
-const taskSchema = new mongoose.Schema({
+export interface ITask {
+    userId: Types.ObjectId;
+    clientTaskId?: string;
+    title: string;
+    description?: string;
+    status: string;
+}
+
+const taskSchema = new mongoose.Schema<ITask>({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true,
     },
-    // Idempotency key for creates. The task _id is derived from it (see controllers/task.js), so a
+    // Idempotency key for creates. The task _id is derived from it (see controllers/task.ts), so a
     // client retry or a Kafka redelivery of the same create collides on _id instead of duplicating.
     clientTaskId: {
         type: String,
@@ -25,4 +33,4 @@ const taskSchema = new mongoose.Schema({
 // Backs the per-user list sorted newest first, and any userId-only lookup.
 taskSchema.index({ userId: 1, createdAt: -1 });
 
-module.exports = mongoose.model('Task', taskSchema);
+export default mongoose.model<ITask>('Task', taskSchema);

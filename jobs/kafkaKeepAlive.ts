@@ -1,11 +1,12 @@
-// jobs/kafkaKeepAlive.js
+// jobs/kafkaKeepAlive.ts
 
-const cron = require("node-cron");
-const { publish, TOPICS } = require("../config/kafka");
+import cron from "node-cron";
+import { publish, TOPICS } from "../config/kafka";
+import { getErrorMessage } from "../utils/errors";
 
 // Aiven's free tier powers Kafka off after 24h without produce/consume traffic. This only helps while the
 // process is running: if the host sleeps when idle (e.g. Render free instances), the cron never fires.
-async function keepKafkaAlive() {
+async function keepKafkaAlive(): Promise<void> {
   try {
     await publish({
       topic: TOPICS.HEALTH_CHECK,
@@ -15,7 +16,7 @@ async function keepKafkaAlive() {
 
     console.log("Kafka keep-alive message sent");
   } catch (error) {
-    console.error("Kafka keep-alive failed:", error.message);
+    console.error("Kafka keep-alive failed:", getErrorMessage(error));
   }
 }
 
@@ -24,4 +25,4 @@ cron.schedule("0 */12 * * *", () => {
   keepKafkaAlive();
 });
 
-module.exports = keepKafkaAlive;
+export default keepKafkaAlive;

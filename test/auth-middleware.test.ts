@@ -1,14 +1,16 @@
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const jwt = require('jsonwebtoken');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import type { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
+import { authenticate } from '../middlewares/auth';
 
+// Read per request, so setting it after the import is enough.
 process.env.JWT_SECRET = 'test-secret';
-const { authenticate } = require('../middlewares/auth');
 
-const run = (headers) => {
-    const req = { headers, cookies: {} };
-    const res = { statusCode: 200 };
-    res.status = (code) => { res.statusCode = code; return res; };
+const run = (headers: Record<string, string>) => {
+    const req = { headers, cookies: {} } as Request;
+    const res = { statusCode: 200 } as Response;
+    res.status = (code: number) => { res.statusCode = code; return res; };
     res.json = () => res;
     let nextCalled = false;
 

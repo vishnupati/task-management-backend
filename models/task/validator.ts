@@ -1,7 +1,7 @@
-const { body, param } = require('express-validator');
-const { MUTABLE_TASK_FIELDS } = require('./events');
+import { body, param } from 'express-validator';
+import { MUTABLE_TASK_FIELDS } from './events';
 
-const validateTaskCreate = [
+export const validateTaskCreate = [
     body('title').isString().withMessage('Title must be a string').bail().notEmpty().withMessage('Title is required'),
     body('description').optional().isString().withMessage('Description must be a string'),
     body('status').optional().isString().withMessage('Status must be a string').bail().notEmpty().withMessage('Status cannot be empty'),
@@ -12,7 +12,7 @@ const validateTaskCreate = [
         .withMessage('clientTaskId must be a string of 1-128 characters'),
 ];
 
-const validateTaskUpdate = [
+export const validateTaskUpdate = [
     param('id').isMongoId().withMessage('Valid id is required'),
     body('title').optional().isString().withMessage('Title must be a string').bail().notEmpty().withMessage('Title is required'),
     body('description').optional().isString().withMessage('Description must be a string').bail().notEmpty().withMessage('Description is required'),
@@ -26,12 +26,10 @@ const validateTaskUpdate = [
     }),
 ];
 
-const validateTaskDelete = [
+export const validateTaskDelete = [
     param('id').isMongoId().withMessage('Valid id is required'),
 ];
 
-const validateTaskGetById = [
+export const validateTaskGetById = [
     param('id').isMongoId().withMessage('Valid id is required'),
 ];
-
-module.exports = { validateTaskCreate, validateTaskUpdate, validateTaskDelete, validateTaskGetById };

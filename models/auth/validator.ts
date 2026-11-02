@@ -1,8 +1,8 @@
-const { body, param, query } = require('express-validator');
+import { body, param, query, type ValidationChain } from 'express-validator';
 
 const ssoProviders = ['google', 'github', 'facebook', 'twitter'];
 
-const validateSsoTokenByProvider = (source) =>
+const validateSsoTokenByProvider = (source: ValidationChain) =>
     source.custom((_, { req }) => {
         const provider = String((req.body && req.body.provider) || (req.params && req.params.provider) || '').toLowerCase();
         const idToken = (req.body && req.body.idToken) || (req.query && req.query.idToken);
@@ -19,7 +19,7 @@ const validateSsoTokenByProvider = (source) =>
         return true;
     });
 
-const validateSignup = [
+export const validateSignup = [
     body('name').trim().notEmpty().withMessage('Name is required'),
     body('email').isEmail().withMessage('A valid email is required'),
     body('password')
@@ -27,14 +27,14 @@ const validateSignup = [
         .withMessage('Password must be at least 6 characters long'),
 ];
 
-const validateLogin = [
+export const validateLogin = [
     body('email').isEmail().withMessage('A valid email is required'),
     body('password').notEmpty().withMessage('Password is required'),
 ];
 
-const validateForceLogin = validateLogin;
+export const validateForceLogin = validateLogin;
 
-const validateSso = [
+export const validateSso = [
     body('provider')
         .isIn(ssoProviders)
         .withMessage(`Provider must be one of: ${ssoProviders.join(', ')}`),
@@ -49,7 +49,7 @@ const validateSso = [
     validateSsoTokenByProvider(body()),
 ];
 
-const validateSsoProviderRoute = [
+export const validateSsoProviderRoute = [
     param('provider')
         .isIn(ssoProviders)
         .withMessage(`Provider must be one of: ${ssoProviders.join(', ')}`),
@@ -72,7 +72,7 @@ const validateSsoProviderRoute = [
     validateSsoTokenByProvider(body()),
 ];
 
-const validateRefreshToken = [
+export const validateRefreshToken = [
     body('refresh_token')
         .optional()
         .isString()
@@ -87,14 +87,4 @@ const validateRefreshToken = [
     }),
 ];
 
-const validateRevokeToken = validateRefreshToken;
-
-module.exports = {
-    validateSignup,
-    validateLogin,
-    validateForceLogin,
-    validateSso,
-    validateSsoProviderRoute,
-    validateRefreshToken,
-    validateRevokeToken,
-};
+export const validateRevokeToken = validateRefreshToken;
